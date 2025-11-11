@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "lit=true": {
+      "model": "electricity:block/electric_lamp_on"
+    },
+    "lit=false": {
+      "model": "electricity:block/electric_lamp"
+    }
+  }
+}

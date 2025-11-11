@@ -1,0 +1,10 @@
+{
+  "itemGroup.electricity.main": "Electricity",
+  "item.electricity.wire": "Wire",
+  "item.electricity.power_wrench": "Power Wrench",
+  "block.electricity.utility_pole": "Utility Pole",
+  "block.electricity.electric_cabin": "Electric Cabin",
+  "block.electricity.power_box": "Power Box",
+  "block.electricity.wind_turbine": "Wind Turbine",
+  "block.electricity.electric_lamp": "Electric Lamp"
+}

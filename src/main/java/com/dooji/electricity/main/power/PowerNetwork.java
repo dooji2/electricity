@@ -1,0 +1,399 @@
+package com.dooji.electricity.main.power;
+
+import com.dooji.electricity.block.ElectricCabinBlockEntity;
+import com.dooji.electricity.block.PowerBoxBlockEntity;
+import com.dooji.electricity.block.UtilityPoleBlockEntity;
+import com.dooji.electricity.block.WindTurbineBlockEntity;
+import com.dooji.electricity.main.network.ElectricityNetworking;
+import com.dooji.electricity.main.wire.WireConnection;
+import com.dooji.electricity.main.wire.WireManager;
+import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class PowerNetwork {
+	private static final Logger LOGGER = LoggerFactory.getLogger("electricity");
+	private final ServerLevel level;
+	private final Map<Integer, PowerNode> powerNodes = new HashMap<>();
+	private final Map<String, PowerConnection> powerConnections = new HashMap<>();
+	private final Map<BlockPos, List<PowerNode>> nodesByPosition = new HashMap<>();
+	private final WireManager wireManager;
+	private final Map<BlockPos, Double> lastSyncedPower = new HashMap<>();
+
+	public PowerNetwork(ServerLevel level, WireManager wireManager) {
+		this.level = level;
+		this.wireManager = wireManager;
+	}
+
+	public void updatePowerNetwork() {
+		clearNetwork();
+		buildNetworkFromWires();
+		calculatePowerFlow();
+		syncToClients();
+	}
+
+	private void clearNetwork() {
+		powerNodes.clear();
+		powerConnections.clear();
+		nodesByPosition.clear();
+	}
+
+	private void buildNetworkFromWires() {
+		var savedData = wireManager.getSavedData(level);
+		if (savedData == null) return;
+
+		for (WireConnection wireConnection : savedData.getAllWireConnections()) {
+			addWireConnection(wireConnection);
+		}
+	}
+
+	private void addWireConnection(WireConnection wireConnection) {
+		int startId = wireConnection.getStartInsulatorId();
+		int endId = wireConnection.getEndInsulatorId();
+
+		PowerNode startNode = getOrCreateNode(startId, wireConnection.getStartBlockPos(), wireConnection.getStartBlockType());
+		PowerNode endNode = getOrCreateNode(endId, wireConnection.getEndBlockPos(), wireConnection.getEndBlockType());
+
+		if (startNode != null && endNode != null) {
+			double distance = calculateDistance(startNode.position, endNode.position);
+			String connectionKey = Math.min(startId, endId) + "_" + Math.max(startId, endId);
+
+			PowerConnection connection = new PowerConnection(startNode, endNode, distance, wireConnection.getStartPowerType(), wireConnection.getEndPowerType());
+			powerConnections.put(connectionKey, connection);
+		}
+	}
+
+	private PowerNode getOrCreateNode(int insulatorId, BlockPos blockPos, String blockType) {
+		if (powerNodes.containsKey(insulatorId)) return powerNodes.get(insulatorId);
+
+		BlockPos immutablePos = blockPos.immutable();
+		BlockEntity blockEntity = level.getBlockEntity(immutablePos);
+		if (blockEntity == null) {
+			LOGGER.warn("Block entity not found at {} for insulator {}", blockPos, insulatorId);
+			return null;
+		}
+
+		boolean typeMatches = false;
+		if ("wind_turbine".equals(blockType) && blockEntity instanceof WindTurbineBlockEntity) {
+			typeMatches = true;
+		} else if ("electric_cabin".equals(blockType) && blockEntity instanceof ElectricCabinBlockEntity) {
+			typeMatches = true;
+		} else if ("utility_pole".equals(blockType) && blockEntity instanceof UtilityPoleBlockEntity) {
+			typeMatches = true;
+		} else if ("power_box".equals(blockType) && blockEntity instanceof PowerBoxBlockEntity) {
+			typeMatches = true;
+		}
+
+		if (!typeMatches) {
+			LOGGER.warn("Block type mismatch at {} - client reported {} but server found {}", blockPos, blockType, blockEntity.getClass().getSimpleName());
+			return null;
+		}
+
+		PowerNode node = new PowerNode(insulatorId, immutablePos, blockEntity);
+		powerNodes.put(insulatorId, node);
+		nodesByPosition.computeIfAbsent(immutablePos, pos -> new ArrayList<>()).add(node);
+		return node;
+	}
+
+	private double calculateDistance(BlockPos pos1, BlockPos pos2) {
+		return Math.sqrt(pos1.distSqr(pos2));
+	}
+
+	private void calculatePowerFlow() {
+		Map<Integer, Double> nodePower = new HashMap<>();
+
+		for (PowerNode node : powerNodes.values()) {
+			if (!(node.blockEntity instanceof WindTurbineBlockEntity)) continue;
+
+			double generatedPower = node.getOutputPower();
+			if (generatedPower <= 0) continue;
+
+			Map<Integer, Double> powerDistribution = distributePower(node.insulatorId, generatedPower, new HashSet<>(), true);
+			for (Map.Entry<Integer, Double> entry : powerDistribution.entrySet()) {
+				nodePower.merge(entry.getKey(), entry.getValue(), Double::sum);
+			}
+		}
+
+		for (PowerNode node : powerNodes.values()) {
+			double power = nodePower.getOrDefault(node.insulatorId, 0.0);
+			node.setPower(power);
+		}
+	}
+
+	private Map<Integer, Double> distributePower(int fromNodeId, double availablePower, Set<Integer> visited, boolean generationAlreadyIncluded) {
+		Map<Integer, Double> distribution = new HashMap<>();
+		if (availablePower <= 0) return distribution;
+
+		PowerNode startNode = powerNodes.get(fromNodeId);
+		if (startNode == null) return distribution;
+
+		double totalPower = availablePower;
+		if (!generationAlreadyIncluded && startNode.blockEntity instanceof WindTurbineBlockEntity turbine) {
+			totalPower += Math.max(0.0, turbine.getGeneratedPower());
+		}
+
+		List<PowerNode> clusterNodes = nodesByPosition.getOrDefault(startNode.position, Collections.singletonList(startNode));
+		if (isClusterVisited(clusterNodes, visited)) return distribution;
+
+		Set<Integer> clusterIds = new HashSet<>();
+		for (PowerNode node : clusterNodes) {
+			visited.add(node.insulatorId);
+			clusterIds.add(node.insulatorId);
+			distribution.put(node.insulatorId, totalPower);
+		}
+
+		List<ClusterConnection> externalConnections = collectExternalConnections(clusterNodes, clusterIds);
+		if (externalConnections.isEmpty()) return distribution;
+
+		Map<BlockPos, TargetGroup> targetGroups = groupConnectionsByTarget(externalConnections);
+		if (targetGroups.isEmpty()) return distribution;
+		List<TargetGroup> viableGroups = new ArrayList<>();
+		for (TargetGroup group : targetGroups.values()) {
+			if (!isClusterVisited(group.targetNode.position, visited)) {
+				viableGroups.add(group);
+			}
+		}
+
+		if (viableGroups.isEmpty()) return distribution;
+
+		double powerPerGroup = totalPower / viableGroups.size();
+
+		for (TargetGroup group : viableGroups) {
+			double deliveredPower = powerPerGroup * group.computeEfficiency();
+			if (deliveredPower <= 0) continue;
+
+			PowerNode target = group.targetNode;
+			distribution.merge(target.insulatorId, deliveredPower, Double::max);
+
+			Map<Integer, Double> subDistribution = distributePower(target.insulatorId, deliveredPower, new HashSet<>(visited), false);
+			for (Map.Entry<Integer, Double> entry : subDistribution.entrySet()) {
+				if (!clusterIds.contains(entry.getKey())) {
+					double finalPower = Math.min(entry.getValue(), deliveredPower);
+					distribution.merge(entry.getKey(), finalPower, Double::max);
+				}
+			}
+		}
+
+		return distribution;
+	}
+
+	private List<ClusterConnection> collectExternalConnections(List<PowerNode> clusterNodes, Set<Integer> clusterIds) {
+		List<ClusterConnection> connections = new ArrayList<>();
+		Set<PowerConnection> seenConnections = Collections.newSetFromMap(new IdentityHashMap<>());
+
+		for (PowerNode node : clusterNodes) {
+			List<PowerConnection> outgoing = getOutgoingConnections(node.insulatorId);
+			for (PowerConnection connection : outgoing) {
+				if (!seenConnections.add(connection)) continue;
+
+				PowerNode other = connection.getOtherNode(node);
+				if (clusterIds.contains(other.insulatorId)) continue;
+
+				connections.add(new ClusterConnection(connection, node));
+			}
+		}
+
+		return connections;
+	}
+
+	private Map<BlockPos, TargetGroup> groupConnectionsByTarget(List<ClusterConnection> connections) {
+		Map<BlockPos, TargetGroup> groups = new HashMap<>();
+
+		for (ClusterConnection clusterConnection : connections) {
+			PowerNode targetNode = clusterConnection.connection.getOtherNode(clusterConnection.sourceNode);
+			BlockPos targetPos = targetNode.position;
+
+			TargetGroup group = groups.computeIfAbsent(targetPos, pos -> new TargetGroup(targetNode));
+			group.addConnection(clusterConnection.connection);
+		}
+
+		return groups;
+	}
+
+	private List<PowerConnection> getOutgoingConnections(int fromNodeId) {
+		List<PowerConnection> connections = new ArrayList<>();
+		for (PowerConnection connection : powerConnections.values()) {
+			if (connection.startNode.insulatorId == fromNodeId) {
+				boolean sameBlockPos = connection.startNode.position.equals(connection.endNode.position);
+
+				if ("output".equals(connection.startPowerType) && ("input".equals(connection.endPowerType) || "bidirectional".equals(connection.endPowerType))) {
+					connections.add(connection);
+				} else if ("bidirectional".equals(connection.startPowerType) && ("input".equals(connection.endPowerType) || "bidirectional".equals(connection.endPowerType))) {
+					connections.add(connection);
+				} else if (sameBlockPos && "input".equals(connection.startPowerType) && "output".equals(connection.endPowerType)) {
+					connections.add(connection);
+				}
+			} else if (connection.endNode.insulatorId == fromNodeId) {
+				boolean sameBlockPos = connection.startNode.position.equals(connection.endNode.position);
+
+				if ("output".equals(connection.endPowerType) && ("input".equals(connection.startPowerType) || "bidirectional".equals(connection.startPowerType))) {
+					connections.add(connection);
+				} else if ("bidirectional".equals(connection.endPowerType) && ("input".equals(connection.startPowerType) || "bidirectional".equals(connection.startPowerType))) {
+					connections.add(connection);
+				} else if (sameBlockPos && "output".equals(connection.endPowerType) && "input".equals(connection.startPowerType)) {
+					connections.add(connection);
+				}
+			}
+		}
+
+		return connections;
+	}
+
+	public double getPowerForInsulator(int insulatorId) {
+		PowerNode node = powerNodes.get(insulatorId);
+		return node != null ? node.getPower() : 0.0;
+	}
+
+	public void syncToClients() {
+		Map<BlockPos, Double> blockPower = new HashMap<>();
+		Map<BlockPos, PowerNode> representatives = new HashMap<>();
+		Set<BlockPos> updatedPositions = new HashSet<>();
+
+		for (PowerNode node : powerNodes.values()) {
+			blockPower.merge(node.position, node.power, Double::max);
+			representatives.putIfAbsent(node.position, node);
+		}
+
+		for (Map.Entry<BlockPos, Double> entry : blockPower.entrySet()) {
+			double power = entry.getValue();
+			BlockPos position = entry.getKey();
+			PowerNode representative = representatives.get(position);
+
+			if (representative != null) {
+				representative.syncToClient(power);
+			} else {
+				applyPower(level.getBlockEntity(position), power);
+			}
+
+			ElectricityNetworking.sendPowerUpdate(level, position, power);
+			updatedPositions.add(position);
+		}
+
+		Set<BlockPos> stalePositions = new HashSet<>(lastSyncedPower.keySet());
+		stalePositions.removeAll(updatedPositions);
+
+		for (BlockPos stalePos : stalePositions) {
+			applyPower(level.getBlockEntity(stalePos), 0.0);
+			ElectricityNetworking.sendPowerUpdate(level, stalePos, 0.0);
+		}
+
+		lastSyncedPower.clear();
+		lastSyncedPower.putAll(blockPower);
+	}
+
+	private boolean isClusterVisited(BlockPos position, Set<Integer> visitedIds) {
+		return isClusterVisited(nodesByPosition.get(position), visitedIds);
+	}
+
+	private boolean isClusterVisited(List<PowerNode> clusterNodes, Set<Integer> visitedIds) {
+		if (clusterNodes == null || clusterNodes.isEmpty()) return false;
+
+		for (PowerNode node : clusterNodes) {
+			if (!visitedIds.contains(node.insulatorId)) return false;
+		}
+		return true;
+	}
+
+	private static void applyPower(BlockEntity blockEntity, double power) {
+		if (blockEntity == null) return;
+		if (blockEntity instanceof WindTurbineBlockEntity turbine) {
+			turbine.setCurrentPower(power);
+		} else if (blockEntity instanceof ElectricCabinBlockEntity cabin) {
+			cabin.setCurrentPower(power);
+		} else if (blockEntity instanceof UtilityPoleBlockEntity pole) {
+			pole.setCurrentPower(power);
+		} else if (blockEntity instanceof PowerBoxBlockEntity powerBox) {
+			powerBox.setCurrentPower(power);
+		}
+	}
+
+	private static class PowerNode {
+		final int insulatorId;
+		final BlockPos position;
+		final BlockEntity blockEntity;
+		double power = 0.0;
+
+		PowerNode(int insulatorId, BlockPos position, BlockEntity blockEntity) {
+			this.insulatorId = insulatorId;
+			this.position = position;
+			this.blockEntity = blockEntity;
+		}
+
+		double getOutputPower() {
+			if (blockEntity instanceof WindTurbineBlockEntity turbine) return turbine.getGeneratedPower();
+			return power;
+		}
+
+		void setPower(double power) {
+			this.power = power;
+		}
+
+		double getPower() {
+			return power;
+		}
+
+		void syncToClient(double syncedPower) {
+			applyPower(blockEntity, syncedPower);
+		}
+	}
+
+	private static class PowerConnection {
+		final PowerNode startNode;
+		final PowerNode endNode;
+		final double distance;
+		final String startPowerType;
+		final String endPowerType;
+
+		PowerConnection(PowerNode startNode, PowerNode endNode, double distance, String startPowerType, String endPowerType) {
+			this.startNode = startNode;
+			this.endNode = endNode;
+			this.distance = distance;
+			this.startPowerType = startPowerType;
+			this.endPowerType = endPowerType;
+		}
+
+		PowerNode getOtherNode(PowerNode node) {
+			return node == startNode ? endNode : startNode;
+		}
+	}
+
+	private static class ClusterConnection {
+		final PowerConnection connection;
+		final PowerNode sourceNode;
+
+		ClusterConnection(PowerConnection connection, PowerNode sourceNode) {
+			this.connection = connection;
+			this.sourceNode = sourceNode;
+		}
+	}
+
+	private static class TargetGroup {
+		final PowerNode targetNode;
+		private double totalDistance = 0.0;
+		private int wireCount = 0;
+
+		TargetGroup(PowerNode targetNode) {
+			this.targetNode = targetNode;
+		}
+
+		void addConnection(PowerConnection connection) {
+			wireCount++;
+			totalDistance += connection.distance;
+		}
+
+		double computeEfficiency() {
+			if (wireCount == 0) return 0.0;
+
+			double averageDistance = totalDistance / wireCount;
+			double normalizedDistance = averageDistance / 100.0;
+
+			double parallelBoost = 1.0 + 0.35 * (wireCount - 1);
+			double distancePenalty = normalizedDistance / parallelBoost;
+
+			return Math.max(0.1, 1.0 - distancePenalty);
+		}
+	}
+}
