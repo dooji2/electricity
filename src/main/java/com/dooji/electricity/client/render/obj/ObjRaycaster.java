@@ -8,11 +8,14 @@ import com.dooji.electricity.block.UtilityPoleBlock;
 import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
 import com.dooji.electricity.client.render.obj.ObjTransforms.Transform;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -209,27 +212,31 @@ public class ObjRaycaster {
 		return tMax >= tMin && tMax >= 0;
 	}
 
-	public static String getPowerDisplayText(BlockPos blockPos) {
+	public static List<Component> getPowerDisplayText(BlockPos blockPos) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.level == null) return null;
 
 		return getPowerDisplayText(mc.level.getBlockEntity(blockPos));
 	}
 
-	public static String getPowerDisplayText(BlockEntity blockEntity) {
+	public static List<Component> getPowerDisplayText(BlockEntity blockEntity) {
 		if (blockEntity instanceof WindTurbineBlockEntity turbine) {
-			double generated = turbine.getGeneratedPower();
-			double current = turbine.getCurrentPower();
-			return String.format("Wind Turbine\nGenerated: %.1f MW\nCurrent: %.1f MW", generated, current);
+			return List.of(
+					blockEntity.getBlockState().getBlock().getName(),
+					Component.translatable("tooltip.electricity.power.generated", formatPower(turbine.getGeneratedPower())),
+					Component.translatable("tooltip.electricity.power.current", formatPower(turbine.getCurrentPower())));
 		} else if (blockEntity instanceof ElectricCabinBlockEntity cabin) {
-			double current = cabin.getCurrentPower();
-			return String.format("Electric Cabin\nPower: %.1f MW", current);
+			return List.of(
+					blockEntity.getBlockState().getBlock().getName(),
+					Component.translatable("tooltip.electricity.power.amount", formatPower(cabin.getCurrentPower())));
 		} else if (blockEntity instanceof UtilityPoleBlockEntity pole) {
-			double current = pole.getCurrentPower();
-			return String.format("Utility Pole\nPower: %.1f MW", current);
+			return List.of(
+					blockEntity.getBlockState().getBlock().getName(),
+					Component.translatable("tooltip.electricity.power.amount", formatPower(pole.getCurrentPower())));
 		} else if (blockEntity instanceof PowerBoxBlockEntity powerBox) {
-			double current = powerBox.getCurrentPower();
-			return String.format("Power Box\nPower: %.1f MW", current);
+			return List.of(
+					blockEntity.getBlockState().getBlock().getName(),
+					Component.translatable("tooltip.electricity.power.amount", formatPower(powerBox.getCurrentPower())));
 		}
 
 		return null;
@@ -329,6 +336,10 @@ public class ObjRaycaster {
 
 	private static Vec3 toVec3(Vector3f vector) {
 		return new Vec3(vector.x, vector.y, vector.z);
+	}
+
+	private static String formatPower(double power) {
+		return String.format(Locale.ROOT, "%.1f", power);
 	}
 
 	private record WorldBounds(Vec3 min, Vec3 max) {

@@ -6,5 +6,16 @@
   "block.electricity.electric_cabin": "Electric Cabin",
   "block.electricity.power_box": "Power Box",
   "block.electricity.wind_turbine": "Wind Turbine",
-  "block.electricity.electric_lamp": "Electric Lamp"
+  "block.electricity.electric_lamp": "Electric Lamp",
+  "screen.electricity.power_info.title": "Power Diagnostics",
+  "screen.electricity.power_info.world_unavailable": "World unavailable",
+  "screen.electricity.power_info.block_removed": "Block removed",
+  "screen.electricity.power_info.no_power_data": "No power data available",
+  "screen.electricity.power_info.wind_speed": "Wind Speed: %s m/s",
+  "screen.electricity.power_info.rotation": "Rotation: %s\u00b0 / %s\u00b0",
+  "screen.electricity.power_info.offsets": "Offsets: (%s, %s, %s)",
+  "screen.electricity.power_info.yaw_pitch": "Yaw / Pitch (deg): (%s, %s)",
+  "tooltip.electricity.power.generated": "Generated: %s kW",
+  "tooltip.electricity.power.current": "Current: %s kW",
+  "tooltip.electricity.power.amount": "Power: %s kW"
 }
