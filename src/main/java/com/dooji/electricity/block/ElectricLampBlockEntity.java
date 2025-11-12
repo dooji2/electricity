@@ -198,10 +198,11 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 	@Override
 	protected void saveAdditional(CompoundTag tag) {
 		super.saveAdditional(tag);
+
 		tag.putDouble("deliveredPower", deliveredPower);
-			tag.putDouble("filteredPower", filteredPower);
-			tag.putDouble("filamentTemperature", filamentTemperature);
-			tag.putDouble("overdriveDamage", overdriveDamage);
+		tag.putDouble("filteredPower", filteredPower);
+		tag.putDouble("filamentTemperature", filamentTemperature);
+		tag.putDouble("overdriveDamage", overdriveDamage);
 		tag.putBoolean("capabilityPowered", capabilityPowered);
 		tag.putBoolean("burnedOut", burnedOut);
 		tag.putLong("lastPowerTick", lastPowerTick);
@@ -218,6 +219,7 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		capabilityPowered = tag.getBoolean("capabilityPowered");
 		burnedOut = tag.getBoolean("burnedOut");
 		lastPowerTick = tag.getLong("lastPowerTick");
+
 		if (tag.contains("glowState")) {
 			visualState = LampState.fromName(tag.getString("glowState"));
 		} else {
