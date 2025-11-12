@@ -73,6 +73,7 @@ public class PowerNetwork {
 		BlockEntity blockEntity = level.getBlockEntity(immutablePos);
 		if (blockEntity == null) {
 			LOGGER.warn("Block entity not found at {} for insulator {}", blockPos, insulatorId);
+			removeStaleConnections(insulatorId);
 			return null;
 		}
 
@@ -89,6 +90,7 @@ public class PowerNetwork {
 
 		if (!typeMatches) {
 			LOGGER.warn("Block type mismatch at {} - client reported {} but server found {}", blockPos, blockType, blockEntity.getClass().getSimpleName());
+			removeStaleConnections(insulatorId);
 			return null;
 		}
 
@@ -96,6 +98,11 @@ public class PowerNetwork {
 		powerNodes.put(insulatorId, node);
 		nodesByPosition.computeIfAbsent(immutablePos, pos -> new ArrayList<>()).add(node);
 		return node;
+	}
+
+	private void removeStaleConnections(int insulatorId) {
+		if (insulatorId <= 0) return;
+		wireManager.removeConnectionsForInsulators(level, new int[]{insulatorId});
 	}
 
 	private double calculateDistance(BlockPos pos1, BlockPos pos2) {
