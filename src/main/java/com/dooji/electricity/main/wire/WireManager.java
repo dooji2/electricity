@@ -68,7 +68,7 @@ public class WireManager {
 		var startInsulator = InsulatorPartHelper.resolve(startEntity, payload.startInsulatorId());
 		var endInsulator = InsulatorPartHelper.resolve(endEntity, payload.endInsulatorId());
 		if (startInsulator.isEmpty() || endInsulator.isEmpty()) {
-			notifyPlayer(player, "Failed to resolve one of the insulators.");
+			notifyPlayer(player, Component.translatable("message.electricity.wire.failed_insulator"));
 			return;
 		}
 
@@ -78,11 +78,14 @@ public class WireManager {
 
 		Vec3 startAnchor = startInsulator.get().anchor();
 		Vec3 endAnchor = endInsulator.get().anchor();
-		if (startAnchor == null || endAnchor == null) return;
+		if (startAnchor == null || endAnchor == null) {
+			notifyPlayer(player, Component.translatable("message.electricity.wire.anchor_unavailable"));
+			return;
+		}
 
 		double spanDistanceSq = startAnchor.distanceToSqr(endAnchor);
 		if (spanDistanceSq > MAX_WIRE_DISTANCE_SQ) {
-			notifyPlayer(player, "Those insulators are too far apart (" + String.format("%.1f", Math.sqrt(spanDistanceSq)) + "m > " + MAX_WIRE_DISTANCE + "m).");
+			notifyPlayer(player, Component.translatable("message.electricity.wire.too_far", String.format("%.1f", Math.sqrt(spanDistanceSq)), MAX_WIRE_DISTANCE));
 			return;
 		}
 
@@ -94,7 +97,7 @@ public class WireManager {
 
 		saveWireConnection(level, connection);
 		broadcastWireCreation(level, connection);
-		notifyPlayer(player, "Connected insulators " + startInsulator.get().insulatorId() + " <-> " + endInsulator.get().insulatorId() + ".");
+		notifyPlayer(player, Component.translatable("message.electricity.wire.connected", startInsulator.get().insulatorId(), endInsulator.get().insulatorId()));
 	}
 
 	private void saveWireConnection(ServerLevel level, WireConnection connection) {
@@ -110,23 +113,23 @@ public class WireManager {
 
 	private boolean validateEndpoint(ServerPlayer player, ServerLevel level, BlockPos pos) {
 		if (!level.hasChunkAt(pos)) {
-			notifyPlayer(player, "Chunk at " + pos + " is not loaded.");
+			notifyPlayer(player, Component.translatable("message.electricity.wire.chunk_unloaded", pos.getX(), pos.getY(), pos.getZ()));
 			return false;
 		}
 
 		if (!level.getWorldBorder().isWithinBounds(pos)) return false;
 
 		if (!level.mayInteract(player, pos)) {
-			notifyPlayer(player, "You cannot interact with " + pos + ".");
+			notifyPlayer(player, Component.translatable("message.electricity.wire.no_permission", pos.getX(), pos.getY(), pos.getZ()));
 			return false;
 		}
 
 		return true;
 	}
 
-	private void notifyPlayer(ServerPlayer player, String message) {
-		if (player != null) {
-			player.displayClientMessage(Component.literal(message), true);
+	private void notifyPlayer(ServerPlayer player, Component message) {
+		if (player != null && message != null) {
+			player.displayClientMessage(message, true);
 		}
 	}
 

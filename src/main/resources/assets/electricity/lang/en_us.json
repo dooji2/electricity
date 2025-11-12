@@ -17,5 +17,11 @@
   "screen.electricity.power_info.yaw_pitch": "Yaw / Pitch (deg): (%s, %s)",
   "tooltip.electricity.power.generated": "Generated: %s kW",
   "tooltip.electricity.power.current": "Current: %s kW",
-  "tooltip.electricity.power.amount": "Power: %s kW"
+  "tooltip.electricity.power.amount": "Power: %s kW",
+  "message.electricity.wire.failed_insulator": "Failed to resolve one of the insulators.",
+  "message.electricity.wire.too_far": "Those insulators are too far apart (%s m > %s m).",
+  "message.electricity.wire.connected": "Connected insulators %s <-> %s.",
+  "message.electricity.wire.chunk_unloaded": "Chunk at (%s, %s, %s) is not loaded.",
+  "message.electricity.wire.no_permission": "You cannot interact with (%s, %s, %s).",
+  "message.electricity.wire.anchor_unavailable": "That device is still initializing; try again in a moment."
 }
