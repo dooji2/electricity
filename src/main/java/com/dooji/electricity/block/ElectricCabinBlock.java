@@ -67,7 +67,7 @@ public class ElectricCabinBlock extends Block implements EntityBlock {
 
 	@Nullable @Override
 	public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> blockEntityType) {
-		return level.isClientSide ? null : (level1, pos, state1, blockEntity) -> {
+		return (lvl, pos, blockState, blockEntity) -> {
 			if (blockEntity instanceof ElectricCabinBlockEntity electricCabin) {
 				electricCabin.tick();
 			}

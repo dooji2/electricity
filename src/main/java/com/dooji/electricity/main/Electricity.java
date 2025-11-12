@@ -24,6 +24,8 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraftforge.common.MinecraftForge;
@@ -86,6 +88,8 @@ public class Electricity {
 	public static RegistryObject<BlockEntityType<PowerBoxBlockEntity>> POWER_BOX_BLOCK_ENTITY;
 	public static RegistryObject<BlockEntityType<WindTurbineBlockEntity>> WIND_TURBINE_BLOCK_ENTITY;
 	public static RegistryObject<BlockEntityType<ElectricLampBlockEntity>> ELECTRIC_LAMP_BLOCK_ENTITY;
+
+	public static final GameRules.Key<GameRules.BooleanValue> RULE_WIND_SURGES = GameRules.register("electricityWindSurges", GameRules.Category.UPDATES, GameRules.BooleanValue.create(false));
 
 	public static final WireManager wireManager = new WireManager();
 	public static PowerNetwork powerNetwork;
@@ -151,5 +155,9 @@ public class Electricity {
 			ServerLevel serverLevel = (ServerLevel) overworld;
 			wireManager.forceSave(serverLevel);
 		}
+	}
+
+	public static boolean windSurgesEnabled(Level level) {
+		return level != null && level.getGameRules().getBoolean(RULE_WIND_SURGES);
 	}
 }

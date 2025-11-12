@@ -45,13 +45,19 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	private static final int POWER_RADIUS = 5;
 	private static final double POWER_THRESHOLD = 0.1;
 	private static final String[] POWER_PROPERTY_NAMES = {"powered", "lit"};
+	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 0.75, -0.25);
+	private static final double SURGE_SHARE_MULTIPLIER = 1.35;
+	private static final double SURGE_DEMAND_MULTIPLIER = 1.75;
+	private static final int SURGE_OVERRIDE_TICKS = 40;
 	private final Set<BlockPos> poweredBlocks = new HashSet<>();
 	private boolean powerFieldActive = false;
+	private int surgeOverrideTicks = 0;
 
 	public PowerBoxBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
 		initializeWirePositions();
 		generateInsulatorIds();
+		updateWirePositions();
 	}
 
 	private static BlockEntityType<PowerBoxBlockEntity> getBlockEntityType() {
@@ -117,10 +123,13 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		String groupName = insulatorGroups[index];
 		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.POWER_BOX_BLOCK.get(), groupName);
 
-		if (boundingBox == null) return null;
-
-		Vector3f center = boundingBox.center;
-		Vec3 localCenter = new Vec3(center.x, center.y, center.z);
+		Vec3 localCenter;
+		if (boundingBox != null) {
+			Vector3f center = boundingBox.center;
+			localCenter = new Vec3(center.x, center.y, center.z);
+		} else {
+			localCenter = DEFAULT_INSULATOR_OFFSET;
+		}
 
 		Direction facing = getBlockState().getValue(PowerBoxBlock.FACING);
 		Vec3 rotatedCenter = rotateVector(localCenter, facing);
@@ -155,6 +164,10 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		});
 
 		if (level == null || level.isClientSide()) return;
+
+		if (surgeOverrideTicks > 0) {
+			surgeOverrideTicks--;
+		}
 
 		boolean shouldActivate = currentPower > POWER_THRESHOLD;
 		if (shouldActivate && !powerFieldActive) {
@@ -253,19 +266,43 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	private void distributePowerToConsumers(List<PowerConsumerTarget> consumers) {
 		if (consumers.isEmpty() || level == null) return;
 
-		double totalRequired = 0.0;
-		for (PowerConsumerTarget target : consumers) {
-			totalRequired += Math.max(0.0, target.requiredPower());
+		int count = consumers.size();
+		double[] demands = new double[count];
+		double[] minimums = new double[count];
+		double totalDemand = 0.0;
+
+		for (int i = 0; i < count; i++) {
+			PowerConsumerTarget target = consumers.get(i);
+			double required = Math.max(0.0, target.requiredPower());
+			double minimum = Math.max(0.0, target.consumer().getMinimumOperationalPower());
+			double demand = Math.max(required, minimum);
+
+			demands[i] = demand;
+			minimums[i] = minimum;
+			totalDemand += demand;
 		}
 
+		boolean surgeEnabled = surgeOverrideTicks > 0;
 		double available = Math.max(0.0, currentPower);
-		for (PowerConsumerTarget target : consumers) {
-			double required = Math.max(0.0, target.requiredPower());
-			double delivered = totalRequired <= 0.0 ? available : available * (required / totalRequired);
-			boolean meets = delivered >= target.consumer().getMinimumOperationalPower();
+		double effectiveAvailable = surgeEnabled ? available * SURGE_SHARE_MULTIPLIER : available;
+		for (int i = 0; i < count; i++) {
+			PowerConsumerTarget target = consumers.get(i);
+			double demand = demands[i];
+			double minimum = minimums[i];
+
+			double share = totalDemand <= 0.0 ? effectiveAvailable : effectiveAvailable * (demand / totalDemand);
+			double maxDemand = surgeEnabled ? demand * SURGE_DEMAND_MULTIPLIER : demand;
+			double delivered = Math.min(share, maxDemand);
+			boolean meets = delivered >= minimum;
+
 			target.consumer().onPowerSupplied(delivered, meets);
 			PowerFieldManager.markPowered(worldPosition, target.position(), delivered);
 		}
+	}
+
+	public void acceptSurgeSignal(boolean active) {
+		if (!active || level == null || level.isClientSide()) return;
+		surgeOverrideTicks = SURGE_OVERRIDE_TICKS;
 	}
 
 	private void notifyConsumersOfShutdown() {
@@ -375,6 +412,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	@Override
 	public void onLoad() {
 		super.onLoad();
+		updateWirePositions();
 		if (level != null && level.isClientSide()) {
 			DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
 				TrackedBlockEntities.track(this);

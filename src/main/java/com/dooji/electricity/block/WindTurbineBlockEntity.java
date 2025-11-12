@@ -16,6 +16,8 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
@@ -43,12 +45,38 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 	private double generatedPower = 0.0;
 	private double currentPower = 0.0;
+	private static final float STORM_WIND_THRESHOLD = 10.0f;
+	private static final int SURGE_MIN_DURATION = 40;
+	private static final int SURGE_MAX_DURATION = 120;
+	private static final int SURGE_COOLDOWN_MIN = 200;
+	private static final int SURGE_COOLDOWN_MAX = 600;
+	private static final float SURGE_BASE_MULTIPLIER = 1.35f;
+	private static final float SURGE_EXTRA_MULTIPLIER = 0.65f;
+	private static final float SURGE_TRIGGER_PROBABILITY = 0.015f;
+	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 9.5, -0.5);
+
+	private int surgeTicks = 0;
+	private int surgeCooldownTicks = 0;
+	private float surgeMultiplier = 1.0f;
+	private float lastEffectiveWindSpeed = 0.0f;
+	private final int stormCycleTicks;
+	private final int stormActiveTicks;
+	private final int stormCycleOffset;
+	private final float stormWindBoost;
+	private final float stormTurbulenceBoost;
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
 		initializeWirePositions();
 		generateInsulatorIds();
 		initializeWindSimulation();
+
+		Random stormRandom = new Random(getBlockPos().asLong() ^ 0x5DEECE66DL);
+		this.stormCycleTicks = 2000 + stormRandom.nextInt(800);
+		this.stormActiveTicks = 900 + stormRandom.nextInt(400);
+		this.stormCycleOffset = stormRandom.nextInt(stormCycleTicks);
+		this.stormWindBoost = 6.5f + stormRandom.nextFloat() * 2.5f;
+		this.stormTurbulenceBoost = 0.5f + stormRandom.nextFloat() * 0.6f;
 	}
 
 	private static BlockEntityType<WindTurbineBlockEntity> getBlockEntityType() {
@@ -74,7 +102,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	public Vec3 getWirePosition(int index) {
 		if (index >= 0 && index < wirePositions.length) return wirePositions[index];
 
-		return Vec3.ZERO;
+		return null;
 	}
 
 	public void setWirePosition(int index, Vec3 position) {
@@ -102,7 +130,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	public float getWindSpeed() {
-		return windSpeed;
+		return lastEffectiveWindSpeed;
 	}
 
 	public float getWindDirection() {
@@ -114,6 +142,10 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		return generatedPower;
 	}
 
+	public boolean isSurging() {
+		return surgeTicks > 0;
+	}
+
 	public double getCurrentPower() {
 		return currentPower;
 	}
@@ -123,22 +155,27 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	private void updateGeneratedPower() {
-		float effectiveWindSpeed = windSpeed;
-		float powerEfficiency = Math.min(1.0f, effectiveWindSpeed / 12.0f);
+		float effectiveWindSpeed = lastEffectiveWindSpeed > 0 ? lastEffectiveWindSpeed : windSpeed;
+		float powerEfficiency = Math.min(1.0f, effectiveWindSpeed / 15.0f);
 		float basePower = 100.0f;
-		generatedPower = basePower * powerEfficiency;
+		generatedPower = basePower * powerEfficiency * surgeMultiplier;
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
-		if (index != 0) return Vec3.ZERO;
+		if (index != 0) return null;
 
 		String groupName = "insulator_Plastic";
 		var boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.WIND_TURBINE_BLOCK.get(), groupName);
-		if (boundingBox == null) return Vec3.ZERO;
+		Vec3 localCenter;
+		if (boundingBox != null) {
+			Vector3f center = boundingBox.center;
+			localCenter = new Vec3(center.x(), center.y(), center.z());
+		} else {
+			localCenter = DEFAULT_INSULATOR_OFFSET;
+		}
 
-		Vector3f center = boundingBox.center;
 		Direction facing = getBlockState().getValue(WindTurbineBlock.FACING);
-		Vec3 rotatedCenter = rotateVector(new Vec3(center.x(), center.y(), center.z()), facing);
+		Vec3 rotatedCenter = rotateVector(localCenter, facing);
 		return Vec3.atLowerCornerOf(getBlockPos()).add(0.5, 0, 0.5).add(rotatedCenter);
 	}
 
@@ -211,47 +248,81 @@ public class WindTurbineBlockEntity extends BlockEntity {
 			windSpeed = targetWindSpeed;
 		}
 
-		float turbulence = (float) Math.sin(currentTime * 0.1) * windTurbulence;
-		float effectiveWindSpeed = windSpeed + turbulence;
-		effectiveWindSpeed = Math.max(0.0f, effectiveWindSpeed);
+		boolean stormActive = isStormActive();
+		float combinedTurbulence = windTurbulence + (stormActive ? stormTurbulenceBoost : 0.0f);
+		float turbulence = (float) Math.sin(currentTime * 0.1) * combinedTurbulence;
+		float effectiveWindSpeed = Math.max(0.0f, windSpeed + turbulence + (stormActive ? stormWindBoost : 0.0f));
+		lastEffectiveWindSpeed = effectiveWindSpeed;
 
-		float maxRotationSpeed = 5.0f;
-		float windEfficiency = Math.min(1.0f, effectiveWindSpeed / 4.0f);
-
-		float targetRotationSpeed = windEfficiency * maxRotationSpeed;
-
-		float rotationAcceleration = 0.05f;
-		float rotationDiff1 = targetRotationSpeed - rotationSpeed1;
-		float rotationDiff2 = targetRotationSpeed - rotationSpeed2;
-
-		if (Math.abs(rotationDiff1) > 0.001f) {
-			rotationSpeed1 += rotationDiff1 * rotationAcceleration;
+		if (level != null && !level.isClientSide) {
+			updateSurgeState(effectiveWindSpeed);
 		}
 
-		if (Math.abs(rotationDiff2) > 0.001f) {
-			rotationSpeed2 += rotationDiff2 * rotationAcceleration;
+		updateRotorSpeeds(effectiveWindSpeed, stormActive);
+	}
+
+	private void updateSurgeState(float effectiveWindSpeed) {
+		if (level != null && !Electricity.windSurgesEnabled(level)) {
+			surgeTicks = 0;
+			surgeMultiplier = 1.0f;
+			return;
 		}
 
-		float variation1 = 1.0f + (float) Math.sin(currentTime * 0.05) * 0.1f;
-		float variation2 = 1.0f + (float) Math.cos(currentTime * 0.07) * 0.1f;
+		if (surgeTicks > 0) {
+				surgeTicks--;
+				if (surgeTicks == 0) {
+					surgeMultiplier = 1.0f;
+					if (level != null) {
+						RandomSource random = level.getRandom();
+						surgeCooldownTicks = SURGE_COOLDOWN_MIN + random.nextInt(SURGE_COOLDOWN_MAX - SURGE_COOLDOWN_MIN + 1);
+					}
+				}
 
-		rotation1 += rotationSpeed1 * variation1;
-		rotation2 += rotationSpeed2 * variation2;
+				return;
+			}
 
-		rotation1 = rotation1 % 360.0f;
-		rotation2 = rotation2 % 360.0f;
-		if (rotation1 < 0) rotation1 += 360.0f;
-		if (rotation2 < 0) rotation2 += 360.0f;
+		if (surgeCooldownTicks > 0) {
+			surgeCooldownTicks--;
+		}
+
+		if (surgeCooldownTicks > 0) return;
+		if (level == null || !Electricity.windSurgesEnabled(level)) return;
+		if (effectiveWindSpeed < STORM_WIND_THRESHOLD) return;
+
+		RandomSource random = level.getRandom();
+		if (random.nextFloat() <= SURGE_TRIGGER_PROBABILITY) {
+			surgeTicks = SURGE_MIN_DURATION + random.nextInt(SURGE_MAX_DURATION - SURGE_MIN_DURATION + 1);
+			surgeMultiplier = SURGE_BASE_MULTIPLIER + random.nextFloat() * SURGE_EXTRA_MULTIPLIER;
+		}
+	}
+
+	private boolean isStormActive() {
+		if (level == null || !Electricity.windSurgesEnabled(level)) return false;
+		long gameTime = level.getGameTime() + stormCycleOffset;
+		int phase = (int) Math.floorMod(gameTime, (long) stormCycleTicks);
+		return phase < stormActiveTicks;
 	}
 
 	public void tick() {
-		updateWindSimulation();
-		updateGeneratedPower();
 		updateWirePositions();
 		DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
 			InsulatorLookup.register(this);
 			WireManagerClient.invalidateInsulatorCache(this.getInsulatorIds());
 		});
+
+		if (level == null) return;
+
+		if (level.isClientSide) {
+			clientVisualTick();
+			return;
+		}
+
+		updateWindSimulation();
+		updateGeneratedPower();
+
+		if ((level.getGameTime() & 3L) == 0) {
+			syncStateToClients();
+		}
 	}
 
 	@Override
@@ -280,14 +351,16 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		windTurbulence = tag.getFloat("windTurbulence");
 		rotationSpeed1 = tag.getFloat("rotationSpeed1");
 		rotationSpeed2 = tag.getFloat("rotationSpeed2");
-		rotation1 = tag.getFloat("rotation1");
-		rotation2 = tag.getFloat("rotation2");
 		windChangeTimer = tag.getFloat("windChangeTimer");
 		windChangeDuration = tag.getFloat("windChangeDuration");
 		baseWindSpeed = tag.getFloat("baseWindSpeed");
 		windVariation = tag.getFloat("windVariation");
 		generatedPower = tag.getDouble("generatedPower");
 		currentPower = tag.getDouble("currentPower");
+		surgeTicks = tag.getInt("surgeTicks");
+		surgeCooldownTicks = tag.getInt("surgeCooldownTicks");
+		surgeMultiplier = tag.contains("surgeMultiplier") ? tag.getFloat("surgeMultiplier") : 1.0f;
+		lastEffectiveWindSpeed = tag.getFloat("lastEffectiveWindSpeed");
 
 		updateWirePositions();
 	}
@@ -329,14 +402,16 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		tag.putFloat("windTurbulence", windTurbulence);
 		tag.putFloat("rotationSpeed1", rotationSpeed1);
 		tag.putFloat("rotationSpeed2", rotationSpeed2);
-		tag.putFloat("rotation1", rotation1);
-		tag.putFloat("rotation2", rotation2);
 		tag.putFloat("windChangeTimer", windChangeTimer);
 		tag.putFloat("windChangeDuration", windChangeDuration);
 		tag.putFloat("baseWindSpeed", baseWindSpeed);
 		tag.putFloat("windVariation", windVariation);
 		tag.putDouble("generatedPower", generatedPower);
 		tag.putDouble("currentPower", currentPower);
+		tag.putInt("surgeTicks", surgeTicks);
+		tag.putInt("surgeCooldownTicks", surgeCooldownTicks);
+		tag.putFloat("surgeMultiplier", surgeMultiplier);
+		tag.putFloat("lastEffectiveWindSpeed", lastEffectiveWindSpeed);
 	}
 
 	@Override
@@ -379,5 +454,56 @@ public class WindTurbineBlockEntity extends BlockEntity {
 				WireManagerClient.invalidateInsulatorCache(this.getInsulatorIds());
 			});
 		}
+	}
+
+	private void syncStateToClients() {
+		if (level == null || level.isClientSide) return;
+		setChanged();
+		level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
+	}
+
+	private void updateRotorSpeeds(float effectiveWindSpeed, boolean stormActive) {
+		float maxRotationSpeed = stormActive ? 12.0f : 7.5f;
+		float rotationScale = stormActive ? 0.65f : 0.5f;
+		float targetRotationSpeed = Math.min(maxRotationSpeed, effectiveWindSpeed * rotationScale);
+
+		float rotationAcceleration = 0.05f;
+		float rotationDiff1 = targetRotationSpeed - rotationSpeed1;
+		float rotationDiff2 = targetRotationSpeed - rotationSpeed2;
+
+		if (Math.abs(rotationDiff1) > 0.001f) {
+			rotationSpeed1 += rotationDiff1 * rotationAcceleration;
+		}
+
+		if (Math.abs(rotationDiff2) > 0.001f) {
+			rotationSpeed2 += rotationDiff2 * rotationAcceleration;
+		}
+	}
+
+	private void clientVisualTick() {
+		float effectiveSpeed = lastEffectiveWindSpeed > 0.0f ? lastEffectiveWindSpeed : windSpeed;
+		boolean stormActive = isStormActive();
+		float currentTime = level.getGameTime() + level.getGameTime() * 0.05f;
+		advanceRotations(currentTime, stormActive, effectiveSpeed);
+	}
+
+	private void advanceRotations(float currentTime, boolean stormActive, float effectiveSpeed) {
+		float variation1 = 1.0f + (float) Math.sin(currentTime * 0.05) * 0.1f;
+		float variation2 = 1.0f + (float) Math.cos(currentTime * 0.07) * 0.1f;
+
+		float appliedSpeed1 = rotationSpeed1;
+		float appliedSpeed2 = rotationSpeed2;
+		if (rotationSpeed1 == 0.0f && effectiveSpeed > 0.0f) {
+			appliedSpeed1 = Math.min(stormActive ? 12.0f : 7.5f, effectiveSpeed * (stormActive ? 0.65f : 0.5f));
+		}
+
+		if (rotationSpeed2 == 0.0f && effectiveSpeed > 0.0f) {
+			appliedSpeed2 = appliedSpeed1;
+		}
+
+		rotation1 = (rotation1 + appliedSpeed1 * variation1) % 360.0f;
+		rotation2 = (rotation2 + appliedSpeed2 * variation2) % 360.0f;
+		if (rotation1 < 0) rotation1 += 360.0f;
+		if (rotation2 < 0) rotation2 += 360.0f;
 	}
 }

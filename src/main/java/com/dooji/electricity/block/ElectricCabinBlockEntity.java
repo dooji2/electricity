@@ -26,6 +26,8 @@ import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
 public class ElectricCabinBlockEntity extends BlockEntity {
+	private static final String[] INSULATOR_PARTS = {"insulator_input_Material.065", "insulatoroutput_Material.044"};
+	private static final Vec3[] DEFAULT_INSULATOR_OFFSETS = {new Vec3(0.0, 0.9, -0.35), new Vec3(0.0, 0.9, 0.35)};
 	private Vec3[] wirePositions = new Vec3[2];
 	private int[] insulatorIds = new int[2];
 
@@ -35,6 +37,7 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 		super(getBlockEntityType(), pos, state);
 		initializeWirePositions();
 		generateInsulatorIds();
+		updateWirePositions();
 	}
 
 	private static BlockEntityType<ElectricCabinBlockEntity> getBlockEntityType() {
@@ -95,15 +98,18 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
 		if (index < 0 || index >= 2) return null;
 
-		String[] insulatorGroups = {"insulator_input_Material.065", "insulatoroutput_Material.044"};
-
-		String groupName = insulatorGroups[index];
+		String groupName = INSULATOR_PARTS[index];
 		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.ELECTRIC_CABIN_BLOCK.get(), groupName);
 
-		if (boundingBox == null) return null;
-
-		Vector3f center = boundingBox.center;
-		Vec3 localCenter = new Vec3(center.x, center.y, center.z);
+		Vec3 localCenter;
+		if (boundingBox != null) {
+			Vector3f center = boundingBox.center;
+			localCenter = new Vec3(center.x, center.y, center.z);
+		} else if (index < DEFAULT_INSULATOR_OFFSETS.length) {
+			localCenter = DEFAULT_INSULATOR_OFFSETS[index];
+		} else {
+			return null;
+		}
 
 		Direction facing = getBlockState().getValue(ElectricCabinBlock.FACING);
 		Vec3 rotatedCenter = rotateVector(localCenter, facing);
@@ -226,6 +232,7 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 	@Override
 	public void onLoad() {
 		super.onLoad();
+		updateWirePositions();
 		if (level != null && level.isClientSide()) {
 			DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
 				TrackedBlockEntities.track(this);

@@ -22,6 +22,7 @@ public class PowerNetwork {
 	private final Map<BlockPos, List<PowerNode>> nodesByPosition = new HashMap<>();
 	private final WireManager wireManager;
 	private final Map<BlockPos, Double> lastSyncedPower = new HashMap<>();
+	private final Set<Integer> surgeImpactedNodes = new HashSet<>();
 
 	public PowerNetwork(ServerLevel level, WireManager wireManager) {
 		this.level = level;
@@ -39,6 +40,7 @@ public class PowerNetwork {
 		powerNodes.clear();
 		powerConnections.clear();
 		nodesByPosition.clear();
+		surgeImpactedNodes.clear();
 	}
 
 	private void buildNetworkFromWires() {
@@ -118,7 +120,7 @@ public class PowerNetwork {
 			double generatedPower = node.getOutputPower();
 			if (generatedPower <= 0) continue;
 
-			Map<Integer, Double> powerDistribution = distributePower(node.insulatorId, generatedPower, new HashSet<>(), true);
+			Map<Integer, Double> powerDistribution = distributePower(node.insulatorId, generatedPower, new HashSet<>(), true, node.hasLocalSurge());
 			for (Map.Entry<Integer, Double> entry : powerDistribution.entrySet()) {
 				nodePower.merge(entry.getKey(), entry.getValue(), Double::sum);
 			}
@@ -127,10 +129,11 @@ public class PowerNetwork {
 		for (PowerNode node : powerNodes.values()) {
 			double power = nodePower.getOrDefault(node.insulatorId, 0.0);
 			node.setPower(power);
+			node.setSurgeActive(surgeImpactedNodes.contains(node.insulatorId));
 		}
 	}
 
-	private Map<Integer, Double> distributePower(int fromNodeId, double availablePower, Set<Integer> visited, boolean generationAlreadyIncluded) {
+	private Map<Integer, Double> distributePower(int fromNodeId, double availablePower, Set<Integer> visited, boolean generationAlreadyIncluded, boolean surgeActive) {
 		Map<Integer, Double> distribution = new HashMap<>();
 		if (availablePower <= 0) return distribution;
 
@@ -140,7 +143,10 @@ public class PowerNetwork {
 		double totalPower = availablePower;
 		if (!generationAlreadyIncluded && startNode.blockEntity instanceof WindTurbineBlockEntity turbine) {
 			totalPower += Math.max(0.0, turbine.getGeneratedPower());
+			surgeActive = surgeActive || turbine.isSurging();
 		}
+
+		boolean localSurge = surgeActive || startNode.hasLocalSurge();
 
 		List<PowerNode> clusterNodes = nodesByPosition.getOrDefault(startNode.position, Collections.singletonList(startNode));
 		if (isClusterVisited(clusterNodes, visited)) return distribution;
@@ -150,6 +156,9 @@ public class PowerNetwork {
 			visited.add(node.insulatorId);
 			clusterIds.add(node.insulatorId);
 			distribution.put(node.insulatorId, totalPower);
+			if (localSurge) {
+				surgeImpactedNodes.add(node.insulatorId);
+			}
 		}
 
 		List<ClusterConnection> externalConnections = collectExternalConnections(clusterNodes, clusterIds);
@@ -175,7 +184,7 @@ public class PowerNetwork {
 			PowerNode target = group.targetNode;
 			distribution.merge(target.insulatorId, deliveredPower, Double::max);
 
-			Map<Integer, Double> subDistribution = distributePower(target.insulatorId, deliveredPower, new HashSet<>(visited), false);
+			Map<Integer, Double> subDistribution = distributePower(target.insulatorId, deliveredPower, new HashSet<>(visited), false, localSurge || target.hasLocalSurge());
 			for (Map.Entry<Integer, Double> entry : subDistribution.entrySet()) {
 				if (!clusterIds.contains(entry.getKey())) {
 					double finalPower = Math.min(entry.getValue(), deliveredPower);
@@ -272,7 +281,7 @@ public class PowerNetwork {
 			if (representative != null) {
 				representative.syncToClient(power);
 			} else {
-				applyPower(level.getBlockEntity(position), power);
+				applyPower(level.getBlockEntity(position), power, false);
 			}
 
 			ElectricityNetworking.sendPowerUpdate(level, position, power);
@@ -283,7 +292,7 @@ public class PowerNetwork {
 		stalePositions.removeAll(updatedPositions);
 
 		for (BlockPos stalePos : stalePositions) {
-			applyPower(level.getBlockEntity(stalePos), 0.0);
+			applyPower(level.getBlockEntity(stalePos), 0.0, false);
 			ElectricityNetworking.sendPowerUpdate(level, stalePos, 0.0);
 		}
 
@@ -304,7 +313,7 @@ public class PowerNetwork {
 		return true;
 	}
 
-	private static void applyPower(BlockEntity blockEntity, double power) {
+	private static void applyPower(BlockEntity blockEntity, double power, boolean surge) {
 		if (blockEntity == null) return;
 		if (blockEntity instanceof WindTurbineBlockEntity turbine) {
 			turbine.setCurrentPower(power);
@@ -314,6 +323,7 @@ public class PowerNetwork {
 			pole.setCurrentPower(power);
 		} else if (blockEntity instanceof PowerBoxBlockEntity powerBox) {
 			powerBox.setCurrentPower(power);
+			powerBox.acceptSurgeSignal(surge);
 		}
 	}
 
@@ -322,6 +332,7 @@ public class PowerNetwork {
 		final BlockPos position;
 		final BlockEntity blockEntity;
 		double power = 0.0;
+		private boolean surgeActive = false;
 
 		PowerNode(int insulatorId, BlockPos position, BlockEntity blockEntity) {
 			this.insulatorId = insulatorId;
@@ -342,8 +353,16 @@ public class PowerNetwork {
 			return power;
 		}
 
+		void setSurgeActive(boolean surgeActive) {
+			this.surgeActive = surgeActive;
+		}
+
+		boolean hasLocalSurge() {
+			return blockEntity instanceof WindTurbineBlockEntity turbine && turbine.isSurging();
+		}
+
 		void syncToClient(double syncedPower) {
-			applyPower(blockEntity, syncedPower);
+			applyPower(blockEntity, syncedPower, surgeActive);
 		}
 	}
 
