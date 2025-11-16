@@ -3,6 +3,7 @@ package com.dooji.electricity.client;
 import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.main.network.ElectricityNetworking;
 import com.dooji.electricity.main.network.payloads.UpdateUtilityPoleConfigPayload;
+import java.util.function.Consumer;
 import javax.annotation.Nonnull;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -13,29 +14,26 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
 public class UtilityPoleConfigScreen extends Screen {
-	private EditBox offsetXField;
-	private EditBox offsetYField;
-	private EditBox offsetZField;
-	private EditBox yawField;
-	private EditBox pitchField;
 	private Button doneButton;
 	private Button cancelButton;
 	private final BlockPos blockPos;
-	private final UtilityPoleBlockEntity blockEntity;
+	private float offsetX = 0.0f;
+	private float offsetY = 0.0f;
+	private float offsetZ = 0.0f;
+	private float yaw = 0.0f;
+	private float pitch = 0.0f;
 
 	public UtilityPoleConfigScreen(BlockPos blockPos) {
 		super(Component.literal("Utility Pole Configuration"));
 		this.blockPos = blockPos;
 
 		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft.level != null) {
-			if (minecraft.level.getBlockEntity(blockPos) instanceof UtilityPoleBlockEntity entity) {
-				this.blockEntity = entity;
-			} else {
-				this.blockEntity = null;
-			}
-		} else {
-			this.blockEntity = null;
+		if (minecraft.level != null && minecraft.level.getBlockEntity(blockPos) instanceof UtilityPoleBlockEntity entity) {
+			this.offsetX = entity.getOffsetX();
+			this.offsetY = entity.getOffsetY();
+			this.offsetZ = entity.getOffsetZ();
+			this.yaw = entity.getYaw();
+			this.pitch = entity.getPitch();
 		}
 	}
 
@@ -49,25 +47,11 @@ public class UtilityPoleConfigScreen extends Screen {
 		int fieldHeight = 20;
 		int spacing = 24;
 
-		this.offsetXField = new EditBox(this.font, centerX - 100, centerY - 60, fieldWidth, fieldHeight, Component.literal("Offset X"));
-		this.offsetXField.setValue(blockEntity != null ? String.valueOf(blockEntity.getOffsetX()) : "0.0");
-		this.addWidget(this.offsetXField);
-
-		this.offsetYField = new EditBox(this.font, centerX - 100, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Offset Y"));
-		this.offsetYField.setValue(blockEntity != null ? String.valueOf(blockEntity.getOffsetY()) : "0.0");
-		this.addWidget(this.offsetYField);
-
-		this.offsetZField = new EditBox(this.font, centerX - 100, centerY - 60 + spacing * 2, fieldWidth, fieldHeight, Component.literal("Offset Z"));
-		this.offsetZField.setValue(blockEntity != null ? String.valueOf(blockEntity.getOffsetZ()) : "0.0");
-		this.addWidget(this.offsetZField);
-
-		this.yawField = new EditBox(this.font, centerX + 20, centerY - 60, fieldWidth, fieldHeight, Component.literal("Yaw (deg)"));
-		this.yawField.setValue(blockEntity != null ? formatDegrees(blockEntity.getYaw()) : "0.0");
-		this.addWidget(this.yawField);
-
-		this.pitchField = new EditBox(this.font, centerX + 20, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Pitch (deg)"));
-		this.pitchField.setValue(blockEntity != null ? formatDegrees(blockEntity.getPitch()) : "0.0");
-		this.addWidget(this.pitchField);
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60, fieldWidth, fieldHeight, Component.literal("Offset X"), offsetX, value -> this.offsetX = value));
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Offset Y"), offsetY, value -> this.offsetY = value));
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing * 2, fieldWidth, fieldHeight, Component.literal("Offset Z"), offsetZ, value -> this.offsetZ = value));
+		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60, fieldWidth, fieldHeight, Component.literal("Yaw (deg)"), yaw, value -> this.yaw = value));
+		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Pitch (deg)"), pitch, value -> this.pitch = value));
 
 		this.doneButton = Button.builder(Component.literal("Done"), button -> {
 			this.saveAndClose();
@@ -82,19 +66,8 @@ public class UtilityPoleConfigScreen extends Screen {
 	}
 
 	private void saveAndClose() {
-		try {
-			float offsetX = Float.parseFloat(this.offsetXField.getValue());
-			float offsetY = Float.parseFloat(this.offsetYField.getValue());
-			float offsetZ = Float.parseFloat(this.offsetZField.getValue());
-			float yaw = parseDegrees(this.yawField);
-			float pitch = parseDegrees(this.pitchField);
-
-			UpdateUtilityPoleConfigPayload payload = new UpdateUtilityPoleConfigPayload(this.blockPos, offsetX, offsetY, offsetZ, yaw, pitch);
-
-			ElectricityNetworking.INSTANCE.sendToServer(payload);
-		} catch (NumberFormatException e) {
-		}
-
+		UpdateUtilityPoleConfigPayload payload = new UpdateUtilityPoleConfigPayload(this.blockPos, offsetX, offsetY, offsetZ, yaw, pitch);
+		ElectricityNetworking.INSTANCE.sendToServer(payload);
 		this.onClose();
 	}
 
@@ -112,33 +85,6 @@ public class UtilityPoleConfigScreen extends Screen {
 		guiGraphics.drawString(this.font, "Yaw (deg):", centerX - 40, centerY - 55, 0xFFFFFF);
 		guiGraphics.drawString(this.font, "Pitch (deg):", centerX - 40, centerY - 55 + 24, 0xFFFFFF);
 
-		if (this.offsetXField != null) this.offsetXField.render(guiGraphics, mouseX, mouseY, partialTick);
-		if (this.offsetYField != null) this.offsetYField.render(guiGraphics, mouseX, mouseY, partialTick);
-		if (this.offsetZField != null) this.offsetZField.render(guiGraphics, mouseX, mouseY, partialTick);
-		if (this.yawField != null) this.yawField.render(guiGraphics, mouseX, mouseY, partialTick);
-		if (this.pitchField != null) this.pitchField.render(guiGraphics, mouseX, mouseY, partialTick);
-	}
-
-	@Override
-	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-		if (this.offsetXField != null && this.offsetXField.keyPressed(keyCode, scanCode, modifiers)) return true;
-		if (this.offsetYField != null && this.offsetYField.keyPressed(keyCode, scanCode, modifiers)) return true;
-		if (this.offsetZField != null && this.offsetZField.keyPressed(keyCode, scanCode, modifiers)) return true;
-		if (this.yawField != null && this.yawField.keyPressed(keyCode, scanCode, modifiers)) return true;
-		if (this.pitchField != null && this.pitchField.keyPressed(keyCode, scanCode, modifiers)) return true;
-
-		return super.keyPressed(keyCode, scanCode, modifiers);
-	}
-
-	@Override
-	public boolean charTyped(char codePoint, int modifiers) {
-		if (this.offsetXField != null && this.offsetXField.charTyped(codePoint, modifiers)) return true;
-		if (this.offsetYField != null && this.offsetYField.charTyped(codePoint, modifiers)) return true;
-		if (this.offsetZField != null && this.offsetZField.charTyped(codePoint, modifiers)) return true;
-		if (this.yawField != null && this.yawField.charTyped(codePoint, modifiers)) return true;
-		if (this.pitchField != null && this.pitchField.charTyped(codePoint, modifiers)) return true;
-
-		return super.charTyped(codePoint, modifiers);
 	}
 
 	@Override
@@ -150,7 +96,35 @@ public class UtilityPoleConfigScreen extends Screen {
 		return String.format("%.2f", Math.toDegrees(radians));
 	}
 
-	private static float parseDegrees(EditBox field) {
-		return (float) Math.toRadians(Float.parseFloat(field.getValue()));
+	private EditBox createFloatField(int x, int y, int width, int height, Component label, float initialValue, Consumer<Float> setter) {
+		EditBox field = new EditBox(this.font, x, y, width, height, label);
+		field.setValue(Float.toString(initialValue));
+		field.setResponder(value -> {
+			Float parsed = tryParseFloat(value);
+			if (parsed != null) {
+				setter.accept(parsed);
+			}
+		});
+		return field;
+	}
+
+	private EditBox createDegreeField(int x, int y, int width, int height, Component label, float initialRadians, Consumer<Float> setter) {
+		EditBox field = new EditBox(this.font, x, y, width, height, label);
+		field.setValue(formatDegrees(initialRadians));
+		field.setResponder(value -> {
+			Float parsed = tryParseFloat(value);
+			if (parsed != null) {
+				setter.accept((float) Math.toRadians(parsed));
+			}
+		});
+		return field;
+	}
+
+	private static Float tryParseFloat(String value) {
+		try {
+			return Float.parseFloat(value);
+		} catch (NumberFormatException ignored) {
+			return null;
+		}
 	}
 }

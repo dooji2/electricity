@@ -126,12 +126,9 @@ public class Electricity {
 	public void onServerStarted(ServerStartedEvent event) {
 		LOGGER.info("Electricity mod initialized on server");
 
-		var overworld = event.getServer().overworld();
-		if (overworld instanceof ServerLevel) {
-			ServerLevel serverLevel = (ServerLevel) overworld;
-			wireManager.loadFromWorld(serverLevel);
-			powerNetwork = new PowerNetwork(serverLevel, wireManager);
-		}
+		ServerLevel serverLevel = event.getServer().overworld();
+		wireManager.loadFromWorld(serverLevel);
+		powerNetwork = new PowerNetwork(serverLevel, wireManager);
 	}
 
 	@SubscribeEvent
@@ -150,11 +147,8 @@ public class Electricity {
 
 	@SubscribeEvent
 	public void onServerStopping(ServerStoppingEvent event) {
-		var overworld = event.getServer().overworld();
-		if (overworld instanceof ServerLevel) {
-			ServerLevel serverLevel = (ServerLevel) overworld;
-			wireManager.forceSave(serverLevel);
-		}
+		ServerLevel serverLevel = event.getServer().overworld();
+		wireManager.forceSave(serverLevel);
 	}
 
 	public static boolean windSurgesEnabled(Level level) {
