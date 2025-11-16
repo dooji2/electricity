@@ -11,6 +11,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 
 public class UtilityPoleConfigScreen extends Screen {
@@ -24,7 +25,7 @@ public class UtilityPoleConfigScreen extends Screen {
 	private float pitch = 0.0f;
 
 	public UtilityPoleConfigScreen(BlockPos blockPos) {
-		super(Component.literal("Utility Pole Configuration"));
+		super(Component.translatable("screen.electricity.utility_pole_config.title"));
 		this.blockPos = blockPos;
 
 		Minecraft minecraft = Minecraft.getInstance();
@@ -47,17 +48,17 @@ public class UtilityPoleConfigScreen extends Screen {
 		int fieldHeight = 20;
 		int spacing = 24;
 
-		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60, fieldWidth, fieldHeight, Component.literal("Offset X"), offsetX, value -> this.offsetX = value));
-		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Offset Y"), offsetY, value -> this.offsetY = value));
-		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing * 2, fieldWidth, fieldHeight, Component.literal("Offset Z"), offsetZ, value -> this.offsetZ = value));
-		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60, fieldWidth, fieldHeight, Component.literal("Yaw (deg)"), yaw, value -> this.yaw = value));
-		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.literal("Pitch (deg)"), pitch, value -> this.pitch = value));
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60, fieldWidth, fieldHeight, Component.translatable("screen.electricity.utility_pole_config.offset_x"), offsetX, value -> this.offsetX = value));
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.translatable("screen.electricity.utility_pole_config.offset_y"), offsetY, value -> this.offsetY = value));
+		this.addRenderableWidget(createFloatField(centerX - 100, centerY - 60 + spacing * 2, fieldWidth, fieldHeight, Component.translatable("screen.electricity.utility_pole_config.offset_z"), offsetZ, value -> this.offsetZ = value));
+		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60, fieldWidth, fieldHeight, Component.translatable("screen.electricity.utility_pole_config.yaw"), yaw, value -> this.yaw = value));
+		this.addRenderableWidget(createDegreeField(centerX + 20, centerY - 60 + spacing, fieldWidth, fieldHeight, Component.translatable("screen.electricity.utility_pole_config.pitch"), pitch, value -> this.pitch = value));
 
-		this.doneButton = Button.builder(Component.literal("Done"), button -> {
+		this.doneButton = Button.builder(CommonComponents.GUI_DONE, button -> {
 			this.saveAndClose();
 		}).bounds(centerX - 100, centerY + 40, 80, 20).build();
 
-		this.cancelButton = Button.builder(Component.literal("Cancel"), button -> {
+		this.cancelButton = Button.builder(CommonComponents.GUI_CANCEL, button -> {
 			this.onClose();
 		}).bounds(centerX + 20, centerY + 40, 80, 20).build();
 
@@ -79,12 +80,11 @@ public class UtilityPoleConfigScreen extends Screen {
 		int centerX = this.width / 2;
 		int centerY = this.height / 2;
 
-		guiGraphics.drawString(this.font, "Offset X:", centerX - 160, centerY - 55, 0xFFFFFF);
-		guiGraphics.drawString(this.font, "Offset Y:", centerX - 160, centerY - 55 + 24, 0xFFFFFF);
-		guiGraphics.drawString(this.font, "Offset Z:", centerX - 160, centerY - 55 + 48, 0xFFFFFF);
-		guiGraphics.drawString(this.font, "Yaw (deg):", centerX - 40, centerY - 55, 0xFFFFFF);
-		guiGraphics.drawString(this.font, "Pitch (deg):", centerX - 40, centerY - 55 + 24, 0xFFFFFF);
-
+		guiGraphics.drawString(this.font, Component.translatable("screen.electricity.utility_pole_config.offset_x"), centerX - 160, centerY - 55, 0xFFFFFF, false);
+		guiGraphics.drawString(this.font, Component.translatable("screen.electricity.utility_pole_config.offset_y"), centerX - 160, centerY - 31, 0xFFFFFF, false);
+		guiGraphics.drawString(this.font, Component.translatable("screen.electricity.utility_pole_config.offset_z"), centerX - 160, centerY - 7, 0xFFFFFF, false);
+		guiGraphics.drawString(this.font, Component.translatable("screen.electricity.utility_pole_config.yaw"), centerX - 40, centerY - 55, 0xFFFFFF, false);
+		guiGraphics.drawString(this.font, Component.translatable("screen.electricity.utility_pole_config.pitch"), centerX - 40, centerY - 31, 0xFFFFFF, false);
 	}
 
 	@Override
