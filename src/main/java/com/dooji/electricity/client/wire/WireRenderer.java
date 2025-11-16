@@ -56,8 +56,6 @@ public class WireRenderer {
 
 	public static void renderAllWires(Minecraft minecraft, PoseStack poseStack) {
 		Collection<WireConnection> connections = WireManagerClient.getAllWireConnections();
-		if (connections.isEmpty()) return;
-
 		ClientLevel level = minecraft.level;
 		if (level == null) return;
 
