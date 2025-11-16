@@ -38,9 +38,11 @@ public class WireInteractionEvents {
 		Player player = event.getEntity();
 		if (player == null) return;
 
-		ItemStack heldItem = player.getItemInHand(InteractionHand.MAIN_HAND);
+		InteractionHand hand = InteractionHand.MAIN_HAND;
+		ItemStack heldItem = player.getItemInHand(hand);
 		if (!(heldItem.getItem() instanceof ItemWire)) {
-			heldItem = player.getItemInHand(InteractionHand.OFF_HAND);
+			hand = InteractionHand.OFF_HAND;
+			heldItem = player.getItemInHand(hand);
 			if (!(heldItem.getItem() instanceof ItemWire)) return;
 		}
 
@@ -79,7 +81,7 @@ public class WireInteractionEvents {
 							Vec3 fallback = ObjRaycaster.getPartCenter(checkPos, hoveredPart, facing);
 							Vec3 partCenter = WireAnchorHelper.anchorOrFallback(blockEntity, hoveredPart, fallback);
 							if (partCenter != null) {
-								handleOBJPartClick(partCenter, checkPos, hoveredPart);
+								handleOBJPartClick(player, hand, partCenter, checkPos, hoveredPart);
 								return;
 							}
 						}
@@ -90,41 +92,45 @@ public class WireInteractionEvents {
 	}
 
 	@OnlyIn(Dist.CLIENT)
-	private static void handleOBJPartClick(Vec3 connectionPoint, BlockPos blockPos, String partName) {
+	private static void handleOBJPartClick(Player player, InteractionHand hand, Vec3 connectionPoint, BlockPos blockPos, String partName) {
 		Vec3 pendingPos = WireManagerClient.getPendingConnection();
 		String pendingPartName = WireManagerClient.getPendingPartName();
+		boolean performedAction = false;
 
 		if (pendingPos == null) {
 			WireManagerClient.setPendingConnection(connectionPoint, blockPos);
 			WireManagerClient.setPendingPartName(partName);
+			performedAction = true;
 		} else if (!pendingPos.equals(connectionPoint)) {
 			BlockPos pendingBlockPos = WireManagerClient.getPendingBlockPos();
 			WireManagerClient.clearPendingConnection();
 
-			createWireFromInsulators(pendingBlockPos, blockPos, pendingPartName, partName);
+			performedAction = createWireFromInsulators(pendingBlockPos, blockPos, pendingPartName, partName);
 		} else {
 			WireManagerClient.clearPendingConnection();
+		}
+
+		if (performedAction && player != null) {
+			player.swing(hand);
 		}
 	}
 
 	@OnlyIn(Dist.CLIENT)
-	private static void createWireFromInsulators(BlockPos startBlockPos, BlockPos endBlockPos, String startPartName, String endPartName) {
+	private static boolean createWireFromInsulators(BlockPos startBlockPos, BlockPos endBlockPos, String startPartName, String endPartName) {
 		var level = Minecraft.getInstance().level;
-		if (level == null) return;
+		if (level == null) return false;
 
 		var startEntity = level.getBlockEntity(startBlockPos);
 		var endEntity = level.getBlockEntity(endBlockPos);
 
-		if (!(startEntity instanceof UtilityPoleBlockEntity || startEntity instanceof ElectricCabinBlockEntity || startEntity instanceof PowerBoxBlockEntity
-				|| startEntity instanceof WindTurbineBlockEntity)
-				|| !(endEntity instanceof UtilityPoleBlockEntity || endEntity instanceof ElectricCabinBlockEntity || endEntity instanceof PowerBoxBlockEntity
-						|| endEntity instanceof WindTurbineBlockEntity)) {
-			return;
+		if (!(startEntity instanceof UtilityPoleBlockEntity || startEntity instanceof ElectricCabinBlockEntity || startEntity instanceof PowerBoxBlockEntity || startEntity instanceof WindTurbineBlockEntity)
+				|| !(endEntity instanceof UtilityPoleBlockEntity || endEntity instanceof ElectricCabinBlockEntity || endEntity instanceof PowerBoxBlockEntity || endEntity instanceof WindTurbineBlockEntity)) {
+			return false;
 		}
 
 		Optional<InsulatorPartHelper.Insulator> start = InsulatorPartHelper.resolve(startEntity, startPartName);
 		Optional<InsulatorPartHelper.Insulator> end = InsulatorPartHelper.resolve(endEntity, endPartName);
-		if (start.isEmpty() || end.isEmpty()) return;
+		if (start.isEmpty() || end.isEmpty()) return false;
 
 		String startBlockType = start.get().blockType();
 		String endBlockType = end.get().blockType();
@@ -136,5 +142,6 @@ public class WireInteractionEvents {
 				startPowerType, endPowerType);
 
 		ElectricityNetworking.INSTANCE.sendToServer(payload);
+		return true;
 	}
 }
