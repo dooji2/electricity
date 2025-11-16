@@ -35,7 +35,6 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 
 	public ElectricCabinBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
-		initializeWirePositions();
 		generateInsulatorIds();
 		updateWirePositions();
 	}
@@ -44,12 +43,6 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 		if (Electricity.ELECTRIC_CABIN_BLOCK_ENTITY != null) return Electricity.ELECTRIC_CABIN_BLOCK_ENTITY.get();
 
 		return null;
-	}
-
-	private void initializeWirePositions() {
-		for (int i = 0; i < wirePositions.length; i++) {
-			wirePositions[i] = null;
-		}
 	}
 
 	private void generateInsulatorIds() {

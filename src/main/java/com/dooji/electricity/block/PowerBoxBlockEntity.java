@@ -55,7 +55,6 @@ public class PowerBoxBlockEntity extends BlockEntity {
 
 	public PowerBoxBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
-		initializeWirePositions();
 		generateInsulatorIds();
 		updateWirePositions();
 	}
@@ -64,12 +63,6 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		if (Electricity.POWER_BOX_BLOCK_ENTITY != null) return Electricity.POWER_BOX_BLOCK_ENTITY.get();
 
 		return null;
-	}
-
-	private void initializeWirePositions() {
-		for (int i = 0; i < wirePositions.length; i++) {
-			wirePositions[i] = null;
-		}
 	}
 
 	private void generateInsulatorIds() {
