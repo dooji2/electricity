@@ -76,8 +76,6 @@ public class ElectricityNetworking {
 							var player = context.getSender();
 							if (player == null) return;
 
-							var world = player.serverLevel();
-
 							Electricity.wireManager.createWireFromInsulators(player, msg);
 						});
 					}

@@ -28,6 +28,8 @@ public interface IElectricPowerConsumer {
 	 * amount of power actually provided (in kW)
 	 * @param meetsRequirement
 	 * true when {@code deliveredPower >= getMinimumOperationalPower()}
+	 * @param event
+	 * contextual power quality information (surges, brownouts, disconnects)
 	 */
-	void onPowerSupplied(double deliveredPower, boolean meetsRequirement);
+	void onPowerSupplied(double deliveredPower, boolean meetsRequirement, PowerDeliveryEvent event);
 }

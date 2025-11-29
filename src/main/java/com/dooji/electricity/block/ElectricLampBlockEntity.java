@@ -2,6 +2,7 @@ package com.dooji.electricity.block;
 
 import com.dooji.electricity.api.power.ElectricityCapabilities;
 import com.dooji.electricity.api.power.IElectricPowerConsumer;
+import com.dooji.electricity.api.power.PowerDeliveryEvent;
 import com.dooji.electricity.block.ElectricLampBlock.LampState;
 import com.dooji.electricity.main.Electricity;
 import com.dooji.electricity.power.PowerFieldManager;
@@ -28,15 +29,20 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 	private static final double COOLING_RATE = 0.02;
 	private static final double OVERHEAT_THRESHOLD = 1.1;
 	private static final double MELT_THRESHOLD = 1.45;
-	private static final double DAMAGE_PER_TICK = 0.02;
-	private static final double DAMAGE_RECOVERY = 0.015;
+	private static final double WEAR_OVERHEAT_RATE = 0.0045;
+	private static final double WEAR_RECOVERY = 0.002;
+	private static final double WEAR_SURGE_RATE = 0.0035;
 
 	private boolean capabilityPowered = false;
 	private boolean burnedOut = false;
 	private double deliveredPower = 0.0;
 	private double filteredPower = 0.0;
 	private double filamentTemperature = 0.0;
-	private double overdriveDamage = 0.0;
+	private double degradation = 0.0;
+	private double pendingSurgeSeverity = 0.0;
+	private int pendingSurgeTicks = 0;
+	private double pendingBrownoutFactor = 1.0;
+	private boolean pendingDisconnect = false;
 	private LampState visualState = LampState.OFF;
 	private long lastPowerTick = -1L;
 	private final LazyOptional<IElectricPowerConsumer> consumerCapability = LazyOptional.of(() -> this);
@@ -59,13 +65,22 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 	}
 
 	@Override
-	public void onPowerSupplied(double deliveredPower, boolean meetsRequirement) {
+	public void onPowerSupplied(double deliveredPower, boolean meetsRequirement, PowerDeliveryEvent event) {
 		if (burnedOut) return;
 
 		this.deliveredPower = Math.max(deliveredPower, 0.0);
 		this.capabilityPowered = this.deliveredPower > 0.0;
 		if (level != null) {
 			this.lastPowerTick = level.getGameTime();
+		}
+
+		if (event != null) {
+			this.pendingSurgeSeverity = Math.max(this.pendingSurgeSeverity, event.surgeSeverity());
+			this.pendingSurgeTicks = Math.max(this.pendingSurgeTicks, event.surgeDuration());
+			this.pendingBrownoutFactor = Math.min(this.pendingBrownoutFactor, event.brownoutFactor());
+			if (event.disconnectActive()) {
+				this.pendingDisconnect = true;
+			}
 		}
 	}
 
@@ -78,9 +93,26 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 			deliveredPower = 0.0;
 		}
 
+		if (pendingSurgeTicks > 0) {
+			pendingSurgeTicks--;
+		} else {
+			pendingSurgeSeverity = 0.0;
+		}
+
+		if (!pendingDisconnect) {
+			pendingBrownoutFactor = Math.min(pendingBrownoutFactor, 1.0);
+		}
+
 		double fieldPower = PowerFieldManager.getPowerAt(worldPosition);
-		double rawPower = burnedOut ? 0.0 : Math.max(fieldPower, capPowered ? deliveredPower : 0.0);
-		double regulatedPower = Math.min(rawPower, REGULATED_POWER_LIMIT);
+		double rawInput = burnedOut ? 0.0 : Math.max(fieldPower, capPowered ? deliveredPower : 0.0);
+		if (pendingDisconnect) {
+			rawInput = 0.0;
+			pendingDisconnect = false;
+		} else if (pendingBrownoutFactor < 1.0) {
+			rawInput *= Math.max(0.0, pendingBrownoutFactor);
+		}
+
+		double regulatedPower = Math.min(rawInput, REGULATED_POWER_LIMIT);
 
 		filteredPower += (regulatedPower - filteredPower) * POWER_FILTER;
 		if (filteredPower < POWER_EPSILON) {
@@ -102,6 +134,11 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		} else if (level.getGameTime() % 40L == 0) {
 			applyLampState(nextState);
 		}
+
+		if (pendingSurgeTicks == 0) {
+			pendingSurgeSeverity = 0.0;
+		}
+		pendingBrownoutFactor = 1.0;
 	}
 
 	private boolean isCapabilityPowerActive() {
@@ -121,14 +158,17 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		filamentTemperature = Math.max(0.0, filamentTemperature);
 
 		if (filamentTemperature <= OVERHEAT_THRESHOLD) {
-			overdriveDamage = Math.max(0.0, overdriveDamage - DAMAGE_RECOVERY);
+			degradation = Math.max(0.0, degradation - WEAR_RECOVERY);
+			if (pendingSurgeSeverity > 0.0) {
+				degradation = Math.min(1.0, degradation + pendingSurgeSeverity * WEAR_SURGE_RATE);
+			}
 			return;
 		}
 
 		double excess = filamentTemperature - OVERHEAT_THRESHOLD;
 		double severity = Mth.clamp(excess / (MELT_THRESHOLD - OVERHEAT_THRESHOLD), 0.0, 1.0);
-		overdriveDamage = Math.min(1.0, overdriveDamage + severity * DAMAGE_PER_TICK);
-		if (filamentTemperature >= MELT_THRESHOLD || overdriveDamage >= 1.0) {
+		degradation = Math.min(1.0, degradation + severity * WEAR_OVERHEAT_RATE + pendingSurgeSeverity * WEAR_SURGE_RATE);
+		if (filamentTemperature >= MELT_THRESHOLD || degradation >= 1.0) {
 			burnedOut = true;
 			deliveredPower = 0.0;
 			filteredPower = 0.0;
@@ -164,7 +204,7 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 	private boolean shouldFlicker(double ratio) {
 		if (level == null) return false;
 
-		double instability = Mth.clamp(0.45 - ratio * 0.4, 0.1, 0.4);
+		double instability = Mth.clamp(0.45 - ratio * 0.4 + pendingSurgeSeverity * 0.3, 0.1, 0.7);
 		long hash = worldPosition.asLong() * 31L + level.getGameTime();
 		double noise = (double) (hash & 0xFFFFL) / 0xFFFFL;
 		return noise < instability;
@@ -202,11 +242,13 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		tag.putDouble("deliveredPower", deliveredPower);
 		tag.putDouble("filteredPower", filteredPower);
 		tag.putDouble("filamentTemperature", filamentTemperature);
-		tag.putDouble("overdriveDamage", overdriveDamage);
+		tag.putDouble("degradation", degradation);
 		tag.putBoolean("capabilityPowered", capabilityPowered);
 		tag.putBoolean("burnedOut", burnedOut);
 		tag.putLong("lastPowerTick", lastPowerTick);
 		tag.putString("glowState", visualState.getSerializedName());
+		tag.putDouble("pendingSurgeSeverity", pendingSurgeSeverity);
+		tag.putInt("pendingSurgeTicks", pendingSurgeTicks);
 	}
 
 	@Override
@@ -215,7 +257,7 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		deliveredPower = tag.getDouble("deliveredPower");
 		filteredPower = tag.getDouble("filteredPower");
 		filamentTemperature = tag.getDouble("filamentTemperature");
-		overdriveDamage = tag.getDouble("overdriveDamage");
+		degradation = tag.contains("degradation") ? tag.getDouble("degradation") : 0.0;
 		capabilityPowered = tag.getBoolean("capabilityPowered");
 		burnedOut = tag.getBoolean("burnedOut");
 		lastPowerTick = tag.getLong("lastPowerTick");
@@ -225,6 +267,9 @@ public class ElectricLampBlockEntity extends BlockEntity implements IElectricPow
 		} else {
 			visualState = LampState.OFF;
 		}
+
+		pendingSurgeSeverity = tag.contains("pendingSurgeSeverity") ? tag.getDouble("pendingSurgeSeverity") : 0.0;
+		pendingSurgeTicks = tag.contains("pendingSurgeTicks") ? tag.getInt("pendingSurgeTicks") : 0;
 	}
 
 	@Override

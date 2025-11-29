@@ -2,12 +2,14 @@ package com.dooji.electricity.block;
 
 import com.dooji.electricity.api.power.ElectricityCapabilities;
 import com.dooji.electricity.api.power.IElectricPowerConsumer;
+import com.dooji.electricity.api.power.PowerDeliveryEvent;
 import com.dooji.electricity.client.TrackedBlockEntities;
 import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
 import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.ElectricityServerConfig;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
 import com.dooji.electricity.power.PowerFieldManager;
 import java.util.ArrayList;
@@ -33,6 +35,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.util.Mth;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
@@ -42,16 +45,14 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	private int[] insulatorIds = new int[1];
 
 	private double currentPower = 0.0;
-	private static final int POWER_RADIUS = 5;
 	private static final double POWER_THRESHOLD = 0.1;
 	private static final String[] POWER_PROPERTY_NAMES = {"powered", "lit"};
 	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 0.75, -0.25);
-	private static final double SURGE_SHARE_MULTIPLIER = 1.35;
-	private static final double SURGE_DEMAND_MULTIPLIER = 1.75;
-	private static final int SURGE_OVERRIDE_TICKS = 40;
+	private PowerDeliveryEvent incomingEvent = PowerDeliveryEvent.none();
+	private boolean breakerTripped = false;
+	private int breakerCooldown = 0;
 	private final Set<BlockPos> poweredBlocks = new HashSet<>();
 	private boolean powerFieldActive = false;
-	private int surgeOverrideTicks = 0;
 
 	public PowerBoxBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -158,8 +159,9 @@ public class PowerBoxBlockEntity extends BlockEntity {
 
 		if (level == null || level.isClientSide()) return;
 
-		if (surgeOverrideTicks > 0) {
-			surgeOverrideTicks--;
+		if (breakerCooldown > 0) {
+			breakerCooldown--;
+			if (breakerCooldown == 0) breakerTripped = false;
 		}
 
 		boolean shouldActivate = currentPower > POWER_THRESHOLD;
@@ -171,6 +173,8 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		} else if (shouldActivate) {
 			refreshPowerField();
 		}
+
+		incomingEvent = PowerDeliveryEvent.none();
 	}
 
 	private void updateWirePositions() {
@@ -193,8 +197,6 @@ public class PowerBoxBlockEntity extends BlockEntity {
 			if (applyPowerToBlock(immutablePos, true)) {
 				newlyPowered.add(immutablePos);
 			}
-
-			PowerFieldManager.markPowered(worldPosition, immutablePos, currentPower);
 
 			BlockEntity blockEntity = level.getBlockEntity(immutablePos);
 			if (blockEntity != null) {
@@ -226,11 +228,12 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	private void iteratePowerFieldPositions(Consumer<BlockPos.MutableBlockPos> consumer) {
 		BlockPos origin = getBlockPos();
 		MutableBlockPos mutable = new MutableBlockPos();
-		int radiusSq = POWER_RADIUS * POWER_RADIUS;
+		int radius = Math.max(1, ElectricityServerConfig.powerBoxRadius());
+		int radiusSq = radius * radius;
 
-		for (int dx = -POWER_RADIUS; dx <= POWER_RADIUS; dx++) {
-			for (int dy = -POWER_RADIUS; dy <= POWER_RADIUS; dy++) {
-				for (int dz = -POWER_RADIUS; dz <= POWER_RADIUS; dz++) {
+		for (int dx = -radius; dx <= radius; dx++) {
+			for (int dy = -radius; dy <= radius; dy++) {
+				for (int dz = -radius; dz <= radius; dz++) {
 					int distSq = dx * dx + dy * dy + dz * dz;
 
 					if (distSq > radiusSq) continue;
@@ -275,27 +278,59 @@ public class PowerBoxBlockEntity extends BlockEntity {
 			totalDemand += demand;
 		}
 
-		boolean surgeEnabled = surgeOverrideTicks > 0;
 		double available = Math.max(0.0, currentPower);
-		double effectiveAvailable = surgeEnabled ? available * SURGE_SHARE_MULTIPLIER : available;
+		double effectiveAvailable = available;
 		for (int i = 0; i < count; i++) {
 			PowerConsumerTarget target = consumers.get(i);
 			double demand = demands[i];
 			double minimum = minimums[i];
 
 			double share = totalDemand <= 0.0 ? effectiveAvailable : effectiveAvailable * (demand / totalDemand);
-			double maxDemand = surgeEnabled ? demand * SURGE_DEMAND_MULTIPLIER : demand;
-			double delivered = Math.min(share, maxDemand);
-			boolean meets = delivered >= minimum;
+			double maxDemand = demand * 1.1;
+			double regulated = Math.min(share, maxDemand);
+			regulated *= 0.92;
 
-			target.consumer().onPowerSupplied(delivered, meets);
-			PowerFieldManager.markPowered(worldPosition, target.position(), delivered);
+			PowerDeliveryEvent event = incomingEvent != null ? incomingEvent : PowerDeliveryEvent.none();
+			boolean trip = breakerTripped;
+			if (event.surgeSeverity() > 0.85 && event.surgeDuration() > 4) {
+				double tripChance = 0.1 + (event.surgeSeverity() - 0.85) * 0.4;
+				if (event.surgeDuration() > 8) tripChance += 0.1;
+				if (share < minimum * 0.5) {
+					tripChance += 0.05;
+				}
+
+				if (tripChance > 0.0 && level.getRandom().nextDouble() < tripChance) {
+					trip = true;
+					breakerTripped = true;
+					breakerCooldown = 60;
+				}
+			}
+
+			if (breakerTripped) {
+				trip = true;
+			}
+
+			if (event.disconnectActive()) {
+				regulated = 0.0;
+				trip = true;
+			} else if (event.brownoutFactor() < 1.0) {
+				regulated = regulated * Mth.clamp(event.brownoutFactor(), 0.0, 1.0);
+			}
+
+			PowerDeliveryEvent consumerEvent = event;
+			if (trip) {
+				regulated = 0.0;
+				consumerEvent = new PowerDeliveryEvent(event.surgeSeverity(), Math.max(event.surgeDuration(), 4), true, 0.0);
+			} else if (demand > 0.0 && regulated < demand) {
+				double brownout = Mth.clamp(regulated / demand, 0.0, 1.0);
+				consumerEvent = new PowerDeliveryEvent(event.surgeSeverity(), event.surgeDuration(), false, brownout);
+			}
+
+			boolean meets = regulated >= minimum;
+
+			target.consumer().onPowerSupplied(regulated, meets, consumerEvent);
+			PowerFieldManager.markPowered(worldPosition, target.position(), regulated);
 		}
-	}
-
-	public void acceptSurgeSignal(boolean active) {
-		if (!active || level == null || level.isClientSide()) return;
-		surgeOverrideTicks = SURGE_OVERRIDE_TICKS;
 	}
 
 	private void notifyConsumersOfShutdown() {
@@ -303,7 +338,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		iteratePowerFieldPositions(pos -> {
 			BlockEntity blockEntity = level.getBlockEntity(pos);
 			if (blockEntity != null) {
-				blockEntity.getCapability(ElectricityCapabilities.ELECTRIC_CONSUMER, null).ifPresent(consumer -> consumer.onPowerSupplied(0.0, false));
+				blockEntity.getCapability(ElectricityCapabilities.ELECTRIC_CONSUMER, null).ifPresent(consumer -> consumer.onPowerSupplied(0.0, false, PowerDeliveryEvent.none()));
 			}
 		});
 	}
@@ -312,6 +347,10 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		PowerConsumerTarget(BlockPos position, IElectricPowerConsumer consumer) {
 			this(position, consumer, consumer.getRequiredPower());
 		}
+	}
+
+	public void setIncomingEvent(PowerDeliveryEvent event) {
+		this.incomingEvent = event != null ? event : PowerDeliveryEvent.none();
 	}
 
 	private BooleanProperty findPowerProperty(BlockState state) {

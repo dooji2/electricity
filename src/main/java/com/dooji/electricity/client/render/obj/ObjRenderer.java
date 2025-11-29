@@ -32,7 +32,7 @@ public class ObjRenderer {
 		renderMeshWithColor(group, vertexBuffer, poseStack, packedLight);
 	}
 
-	private static void renderMeshWithColor(ObjModel.ObjGroup group, VertexConsumer vertexConsumer, PoseStack poseStack, int packedLight) {
+	private static void renderMeshWithColor(ObjModel.ObjGroup group, VertexConsumer consumer, PoseStack poseStack, int packedLight) {
 		var vertices = group.vertices;
 		var normals = group.normals;
 		var uvs = group.texCoords;
@@ -51,7 +51,7 @@ public class ObjRenderer {
 			normalMatrix.transform(transformedNormal);
 			transformedNormal.normalize().mul(-1.0f);
 
-			vertexConsumer.vertex(matrix, pos.x, pos.y, pos.z).color(255, 255, 255, 255).uv(u, v).overlayCoords(0, 10).uv2(packedLight)
+			consumer.vertex(matrix, pos.x, pos.y, pos.z).color(255, 255, 255, 255).uv(u, v).overlayCoords(0, 10).uv2(packedLight)
 					.normal(transformedNormal.x, transformedNormal.y, transformedNormal.z).endVertex();
 		}
 	}

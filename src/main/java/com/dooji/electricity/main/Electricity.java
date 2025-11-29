@@ -16,6 +16,7 @@ import com.dooji.electricity.item.PowerWrenchItem;
 import com.dooji.electricity.main.network.ElectricityNetworking;
 import com.dooji.electricity.main.power.PowerNetwork;
 import com.dooji.electricity.main.wire.WireManager;
+import com.dooji.electricity.main.weather.GlobalWeatherManager;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -24,8 +25,6 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.GameRules;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraftforge.common.MinecraftForge;
@@ -35,7 +34,10 @@ import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.DeferredRegister;
@@ -89,8 +91,6 @@ public class Electricity {
 	public static RegistryObject<BlockEntityType<WindTurbineBlockEntity>> WIND_TURBINE_BLOCK_ENTITY;
 	public static RegistryObject<BlockEntityType<ElectricLampBlockEntity>> ELECTRIC_LAMP_BLOCK_ENTITY;
 
-	public static final GameRules.Key<GameRules.BooleanValue> RULE_WIND_SURGES = GameRules.register("electricityWindSurges", GameRules.Category.UPDATES, GameRules.BooleanValue.create(false));
-
 	public static final WireManager wireManager = new WireManager();
 	public static PowerNetwork powerNetwork;
 
@@ -99,6 +99,7 @@ public class Electricity {
 		BLOCKS.register(modEventBus);
 		ITEMS.register(modEventBus);
 		CREATIVE_TABS.register(modEventBus);
+		ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, ElectricityServerConfig.spec(), "Electricity/server.toml");
 
 		UTILITY_POLE_BLOCK_ENTITY = BLOCK_ENTITY_TYPES.register("utility_pole", () -> BlockEntityType.Builder.of(UtilityPoleBlockEntity::new, UTILITY_POLE_BLOCK.get()).build(null));
 
@@ -127,6 +128,7 @@ public class Electricity {
 		LOGGER.info("Electricity mod initialized on server");
 
 		ServerLevel serverLevel = event.getServer().overworld();
+		GlobalWeatherManager.get(serverLevel);
 		wireManager.loadFromWorld(serverLevel);
 		powerNetwork = new PowerNetwork(serverLevel, wireManager);
 	}
@@ -140,7 +142,14 @@ public class Electricity {
 
 	@SubscribeEvent
 	public void onServerTick(TickEvent.ServerTickEvent event) {
-		if (event.phase == TickEvent.Phase.END && powerNetwork != null) {
+		if (event.phase == TickEvent.Phase.START) {
+			for (ServerLevel level : event.getServer().getAllLevels()) {
+				GlobalWeatherManager.get(level).tick();
+			}
+			return;
+		}
+
+		if (powerNetwork != null) {
 			powerNetwork.updatePowerNetwork();
 		}
 	}
@@ -149,9 +158,15 @@ public class Electricity {
 	public void onServerStopping(ServerStoppingEvent event) {
 		ServerLevel serverLevel = event.getServer().overworld();
 		wireManager.forceSave(serverLevel);
+		for (ServerLevel level : event.getServer().getAllLevels()) {
+			GlobalWeatherManager.clear(level);
+		}
 	}
 
-	public static boolean windSurgesEnabled(Level level) {
-		return level != null && level.getGameRules().getBoolean(RULE_WIND_SURGES);
+	@SubscribeEvent
+	public void onLevelUnload(LevelEvent.Unload event) {
+		if (event.getLevel() instanceof ServerLevel serverLevel) {
+			GlobalWeatherManager.clear(serverLevel);
+		}
 	}
 }

@@ -4,12 +4,16 @@ import com.dooji.electricity.block.ElectricCabinBlockEntity;
 import com.dooji.electricity.block.PowerBoxBlockEntity;
 import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
+import com.dooji.electricity.api.power.PowerDeliveryEvent;
 import com.dooji.electricity.main.network.ElectricityNetworking;
+import com.dooji.electricity.main.weather.GlobalWeatherManager;
+import com.dooji.electricity.main.weather.WeatherSnapshot;
 import com.dooji.electricity.main.wire.WireConnection;
 import com.dooji.electricity.main.wire.WireManager;
 import java.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +27,8 @@ public class PowerNetwork {
 	private final WireManager wireManager;
 	private final Map<BlockPos, Double> lastSyncedPower = new HashMap<>();
 	private final Set<Integer> surgeImpactedNodes = new HashSet<>();
+	private final Map<Integer, PowerDeliveryEvent> nodeEvents = new HashMap<>();
+	private final Map<Integer, GeneratorEvent> generatorEvents = new HashMap<>();
 
 	public PowerNetwork(ServerLevel level, WireManager wireManager) {
 		this.level = level;
@@ -41,6 +47,7 @@ public class PowerNetwork {
 		powerConnections.clear();
 		nodesByPosition.clear();
 		surgeImpactedNodes.clear();
+		generatorEvents.clear();
 	}
 
 	private void buildNetworkFromWires() {
@@ -113,6 +120,7 @@ public class PowerNetwork {
 
 	private void calculatePowerFlow() {
 		Map<Integer, Double> nodePower = new HashMap<>();
+		nodeEvents.clear();
 
 		for (PowerNode node : powerNodes.values()) {
 			if (!(node.blockEntity instanceof WindTurbineBlockEntity)) continue;
@@ -120,7 +128,8 @@ public class PowerNetwork {
 			double generatedPower = node.getOutputPower();
 			if (generatedPower <= 0) continue;
 
-			Map<Integer, Double> powerDistribution = distributePower(node.insulatorId, generatedPower, new HashSet<>(), true, node.hasLocalSurge());
+			PowerDeliveryEvent generatorEvent = createGeneratorEvent((WindTurbineBlockEntity) node.blockEntity);
+			Map<Integer, Double> powerDistribution = distributePower(node.insulatorId, generatedPower, new HashSet<>(), true, node.hasLocalSurge(), generatorEvent, nodeEvents);
 			for (Map.Entry<Integer, Double> entry : powerDistribution.entrySet()) {
 				nodePower.merge(entry.getKey(), entry.getValue(), Double::sum);
 			}
@@ -129,11 +138,11 @@ public class PowerNetwork {
 		for (PowerNode node : powerNodes.values()) {
 			double power = nodePower.getOrDefault(node.insulatorId, 0.0);
 			node.setPower(power);
-			node.setSurgeActive(surgeImpactedNodes.contains(node.insulatorId));
+			node.setEvent(nodeEvents.getOrDefault(node.insulatorId, PowerDeliveryEvent.none()));
 		}
 	}
 
-	private Map<Integer, Double> distributePower(int fromNodeId, double availablePower, Set<Integer> visited, boolean generationAlreadyIncluded, boolean surgeActive) {
+	private Map<Integer, Double> distributePower(int fromNodeId, double availablePower, Set<Integer> visited, boolean generationAlreadyIncluded, boolean surgeActive, PowerDeliveryEvent incomingEvent, Map<Integer, PowerDeliveryEvent> eventOut) {
 		Map<Integer, Double> distribution = new HashMap<>();
 		if (availablePower <= 0) return distribution;
 
@@ -147,6 +156,7 @@ public class PowerNetwork {
 		}
 
 		boolean localSurge = surgeActive || startNode.hasLocalSurge();
+		PowerDeliveryEvent currentEvent = incomingEvent;
 
 		List<PowerNode> clusterNodes = nodesByPosition.getOrDefault(startNode.position, Collections.singletonList(startNode));
 		if (isClusterVisited(clusterNodes, visited)) return distribution;
@@ -159,6 +169,8 @@ public class PowerNetwork {
 			if (localSurge) {
 				surgeImpactedNodes.add(node.insulatorId);
 			}
+
+			eventOut.merge(node.insulatorId, currentEvent, this::mergeEvents);
 		}
 
 		List<ClusterConnection> externalConnections = collectExternalConnections(clusterNodes, clusterIds);
@@ -183,8 +195,10 @@ public class PowerNetwork {
 
 			PowerNode target = group.targetNode;
 			distribution.merge(target.insulatorId, deliveredPower, Double::max);
+			PowerDeliveryEvent propagatedEvent = attenuateEvent(currentEvent, group.computeEfficiency());
+			eventOut.merge(target.insulatorId, propagatedEvent, this::mergeEvents);
 
-			Map<Integer, Double> subDistribution = distributePower(target.insulatorId, deliveredPower, new HashSet<>(visited), false, localSurge || target.hasLocalSurge());
+			Map<Integer, Double> subDistribution = distributePower(target.insulatorId, deliveredPower, new HashSet<>(visited), false, localSurge || target.hasLocalSurge(), propagatedEvent, eventOut);
 			for (Map.Entry<Integer, Double> entry : subDistribution.entrySet()) {
 				if (!clusterIds.contains(entry.getKey())) {
 					double finalPower = Math.min(entry.getValue(), deliveredPower);
@@ -194,6 +208,67 @@ public class PowerNetwork {
 		}
 
 		return distribution;
+	}
+
+	private PowerDeliveryEvent createGeneratorEvent(WindTurbineBlockEntity turbine) {
+		int id = turbine.getInsulatorId(0);
+		GeneratorEvent state = generatorEvents.get(id);
+		if (state != null && state.remaining > 0) {
+			int nextRemaining = state.remaining - 1;
+			generatorEvents.put(id, new GeneratorEvent(state.severity, nextRemaining, state.disconnect, state.brownout));
+			return new PowerDeliveryEvent(state.severity, nextRemaining, state.disconnect, state.brownout);
+		}
+
+		WeatherSnapshot weather = GlobalWeatherManager.get(level).sample(turbine.getBlockPos());
+		double turbulence = weather.turbulence();
+		double windSpeed = weather.windSpeed();
+		var random = level.getRandom();
+
+		double gustFactor = Mth.clamp((windSpeed - 8.0) / 12.0, 0.0, 1.0);
+		double baseSeverity = Math.max(0.0, (turbulence - 0.25) * 0.6 + gustFactor * 0.4);
+		double severity = Math.max(0.0, baseSeverity + random.nextDouble() * 0.05);
+		int duration = severity > 0.25 ? 4 + random.nextInt(5) : 0;
+
+		boolean disconnect = false;
+		double brownout = 1.0;
+		if (windSpeed > 18.0 || turbulence > 0.75) {
+			double faultChance = Mth.clamp((windSpeed - 18.0) * 0.04 + (turbulence - 0.75) * 0.25, 0.0, 0.5);
+			if (random.nextDouble() < faultChance) {
+				disconnect = true;
+				duration = Math.max(duration, 6 + random.nextInt(5));
+				brownout = 0.4 + random.nextDouble() * 0.2;
+			}
+		}
+
+		if (duration > 0 || disconnect || brownout < 1.0) {
+			generatorEvents.put(id, new GeneratorEvent(severity, duration, disconnect, brownout));
+		} else {
+			generatorEvents.remove(id);
+		}
+
+		return new PowerDeliveryEvent(severity, duration, disconnect, brownout);
+	}
+
+	private PowerDeliveryEvent attenuateEvent(PowerDeliveryEvent event, double efficiency) {
+		if (event == null) return PowerDeliveryEvent.none();
+		double severity = event.surgeSeverity() * Mth.clamp(efficiency, 0.0, 1.0) * 0.95;
+		int duration = event.surgeDuration() > 0 ? Math.max(0, event.surgeDuration() - 1) : 0;
+		boolean ifDisconnect = event.disconnectActive() && duration > 0;
+		double brownout = duration > 0 ? 1.0 - (1.0 - event.brownoutFactor()) * Mth.clamp(efficiency, 0.0, 1.0) : 1.0;
+		return new PowerDeliveryEvent(severity, duration, ifDisconnect, brownout);
+	}
+
+	private PowerDeliveryEvent mergeEvents(PowerDeliveryEvent a, PowerDeliveryEvent b) {
+		if (a == null) return b == null ? PowerDeliveryEvent.none() : b;
+		if (b == null) return a;
+		double severity = Math.max(a.surgeSeverity(), b.surgeSeverity());
+		int duration = Math.max(a.surgeDuration(), b.surgeDuration());
+		boolean ifDisconnect = a.disconnectActive() || b.disconnectActive();
+		double brownout = Math.min(a.brownoutFactor(), b.brownoutFactor());
+		return new PowerDeliveryEvent(severity, duration, ifDisconnect, brownout);
+	}
+
+	private record GeneratorEvent(double severity, int remaining, boolean disconnect, double brownout) {
 	}
 
 	private List<ClusterConnection> collectExternalConnections(List<PowerNode> clusterNodes, Set<Integer> clusterIds) {
@@ -266,22 +341,25 @@ public class PowerNetwork {
 	public void syncToClients() {
 		Map<BlockPos, Double> blockPower = new HashMap<>();
 		Map<BlockPos, PowerNode> representatives = new HashMap<>();
+		Map<BlockPos, PowerDeliveryEvent> blockEvents = new HashMap<>();
 		Set<BlockPos> updatedPositions = new HashSet<>();
 
 		for (PowerNode node : powerNodes.values()) {
 			blockPower.merge(node.position, node.power, Double::max);
 			representatives.putIfAbsent(node.position, node);
+			blockEvents.merge(node.position, node.event, this::mergeEvents);
 		}
 
 		for (Map.Entry<BlockPos, Double> entry : blockPower.entrySet()) {
 			double power = entry.getValue();
 			BlockPos position = entry.getKey();
 			PowerNode representative = representatives.get(position);
+			PowerDeliveryEvent event = blockEvents.getOrDefault(position, PowerDeliveryEvent.none());
 
 			if (representative != null) {
-				representative.syncToClient(power);
+				representative.syncToClient(power, event);
 			} else {
-				applyPower(level.getBlockEntity(position), power, false);
+				applyPower(level.getBlockEntity(position), power, event);
 			}
 
 			ElectricityNetworking.sendPowerUpdate(level, position, power);
@@ -292,7 +370,7 @@ public class PowerNetwork {
 		stalePositions.removeAll(updatedPositions);
 
 		for (BlockPos stalePos : stalePositions) {
-			applyPower(level.getBlockEntity(stalePos), 0.0, false);
+			applyPower(level.getBlockEntity(stalePos), 0.0, PowerDeliveryEvent.none());
 			ElectricityNetworking.sendPowerUpdate(level, stalePos, 0.0);
 		}
 
@@ -313,7 +391,7 @@ public class PowerNetwork {
 		return true;
 	}
 
-	private static void applyPower(BlockEntity blockEntity, double power, boolean surge) {
+	private static void applyPower(BlockEntity blockEntity, double power, PowerDeliveryEvent event) {
 		if (blockEntity == null) return;
 		if (blockEntity instanceof WindTurbineBlockEntity turbine) {
 			turbine.setCurrentPower(power);
@@ -323,7 +401,7 @@ public class PowerNetwork {
 			pole.setCurrentPower(power);
 		} else if (blockEntity instanceof PowerBoxBlockEntity powerBox) {
 			powerBox.setCurrentPower(power);
-			powerBox.acceptSurgeSignal(surge);
+			powerBox.setIncomingEvent(event);
 		}
 	}
 
@@ -332,7 +410,7 @@ public class PowerNetwork {
 		final BlockPos position;
 		final BlockEntity blockEntity;
 		double power = 0.0;
-		private boolean surgeActive = false;
+		private PowerDeliveryEvent event = PowerDeliveryEvent.none();
 
 		PowerNode(int insulatorId, BlockPos position, BlockEntity blockEntity) {
 			this.insulatorId = insulatorId;
@@ -353,16 +431,16 @@ public class PowerNetwork {
 			return power;
 		}
 
-		void setSurgeActive(boolean surgeActive) {
-			this.surgeActive = surgeActive;
-		}
-
 		boolean hasLocalSurge() {
 			return blockEntity instanceof WindTurbineBlockEntity turbine && turbine.isSurging();
 		}
 
-		void syncToClient(double syncedPower) {
-			applyPower(blockEntity, syncedPower, surgeActive);
+		void setEvent(PowerDeliveryEvent event) {
+			this.event = event != null ? event : PowerDeliveryEvent.none();
+		}
+
+		void syncToClient(double syncedPower, PowerDeliveryEvent event) {
+			applyPower(blockEntity, syncedPower, event);
 		}
 	}
 
