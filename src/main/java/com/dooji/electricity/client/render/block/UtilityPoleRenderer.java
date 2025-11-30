@@ -46,7 +46,7 @@ public class UtilityPoleRenderer {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj");
+		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj");
 		ObjBlockRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), modelLocation, null);
 
 		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_1_Material.023", null);
@@ -62,7 +62,7 @@ public class UtilityPoleRenderer {
 	}
 
 	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj"));
+		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj"));
 		if (model == null) return;
 
 		Map<String, ObjModel.BoundingBox> insulatorBoxes = new HashMap<>();

@@ -14,11 +14,15 @@ import com.dooji.electricity.main.Electricity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -33,6 +37,7 @@ import org.slf4j.LoggerFactory;
 public class WindTurbineRenderer {
 	private static final double MAX_RENDER_DISTANCE_SQ = 128 * 128;
 	private static final Logger LOGGER = LoggerFactory.getLogger(Electricity.MOD_ID);
+	private static final Map<BlockPos, Float> YAW_CACHE = new HashMap<>();
 
 	@SubscribeEvent
 	public static void onRenderLevel(RenderLevelStageEvent event) {
@@ -43,11 +48,17 @@ public class WindTurbineRenderer {
 
 		Vec3 cameraPos = mc.gameRenderer.getMainCamera().getPosition();
 		MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
+		Set<BlockPos> seen = new HashSet<>();
 
 		for (WindTurbineBlockEntity turbine : TrackedBlockEntities.ofType(WindTurbineBlockEntity.class)) {
+			seen.add(turbine.getBlockPos());
 			ObjRenderUtil.withAlignedPose(turbine, event.getPoseStack(), bufferSource, cameraPos, MAX_RENDER_DISTANCE_SQ, state -> state.getValue(WindTurbineBlock.FACING),
 					WindTurbineRenderer::rotationForTurbine,
 					(context, pose, buffers) -> renderWindTurbineWithAnimation(context.model(), pose, buffers, context.texture(), context.packedLight(), turbine));
+		}
+
+		if (!YAW_CACHE.isEmpty() && !seen.isEmpty()) {
+			YAW_CACHE.keySet().removeIf(pos -> !seen.contains(pos));
 		}
 		bufferSource.endBatch();
 	}
@@ -56,6 +67,9 @@ public class WindTurbineRenderer {
 			WindTurbineBlockEntity blockEntity) {
 		float rotation1 = blockEntity.getRotation1();
 		float rotation2 = blockEntity.getRotation2();
+		float base = rotationForTurbine(blockEntity.getBlockState().getValue(WindTurbineBlock.FACING));
+		float renderYaw = smoothYaw(blockEntity.getBlockPos(), blockEntity.getYaw(), base);
+		float yawOffset = Mth.wrapDegrees(renderYaw - base);
 
 		Vec3 hubCenter = null;
 		for (Map.Entry<String, ObjModel.ObjGroup> entry : model.groups.entrySet()) {
@@ -67,6 +81,11 @@ public class WindTurbineRenderer {
 
 		if (hubCenter == null) {
 			hubCenter = new Vec3(0.0, 12.65, 0.95);
+		}
+
+		poseStack.pushPose();
+		if (yawOffset != 0.0f) {
+			poseStack.mulPose(Axis.YP.rotationDegrees(yawOffset));
 		}
 
 		for (Map.Entry<String, ObjModel.ObjGroup> entry : model.groups.entrySet()) {
@@ -88,6 +107,8 @@ public class WindTurbineRenderer {
 			ObjRenderer.renderGroup(group, poseStack, bufferSource, model, textureLocation, packedLight);
 			poseStack.popPose();
 		}
+
+		poseStack.popPose();
 	}
 
 	private static Vec3 calculateGroupCenter(ObjModel.ObjGroup group) {
@@ -110,7 +131,7 @@ public class WindTurbineRenderer {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/wind_turbine/wind_turbine.obj");
+		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/wind_turbine/wind_turbine.obj");
 		ObjBlockRegistry.register(Electricity.WIND_TURBINE_BLOCK.get(), modelLocation, null);
 
 		ObjInteractionRegistry.register(Electricity.WIND_TURBINE_BLOCK.get(), "insulator_Plastic", null);
@@ -119,7 +140,7 @@ public class WindTurbineRenderer {
 	}
 
 	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/wind_turbine/wind_turbine.obj"));
+		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/wind_turbine/wind_turbine.obj"));
 		if (model == null) {
 			LOGGER.error("Failed to load Wind Turbine model");
 			return;
@@ -148,5 +169,20 @@ public class WindTurbineRenderer {
 			case WEST -> 270.0f;
 			default -> 180.0f;
 		};
+	}
+
+	private static float smoothYaw(BlockPos pos, float target, float base) {
+		float current = YAW_CACHE.containsKey(pos) ? YAW_CACHE.get(pos) : target;
+		if (Minecraft.getInstance().isPaused()) return current;
+		float delta = Mth.wrapDegrees(target - current);
+		float step = Mth.clamp(delta * 0.1f, -1.5f, 1.5f);
+		if (Math.abs(delta) <= 0.25f) {
+			current = target;
+		} else {
+			current = Mth.wrapDegrees(current + step);
+		}
+
+		YAW_CACHE.put(pos, current);
+		return current;
 	}
 }

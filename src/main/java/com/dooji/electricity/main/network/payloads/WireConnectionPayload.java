@@ -5,7 +5,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 
 public record WireConnectionPayload(WireConnection connection, boolean isCreation) {
-	public static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath("electricity", "wire_connection");
+public static final ResourceLocation ID = new ResourceLocation("electricity", "wire_connection");
 
 	public WireConnectionPayload(FriendlyByteBuf buf) {
 		this(readConnection(buf), buf.readBoolean());

@@ -41,13 +41,20 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 9.5, -0.5);
 
 	private float lastEffectiveWindSpeed = 0.0f;
+	private float lastAlignedWindSpeed = 0.0f;
 	private float windDirection = 0.0f;
 	private double turbulence = 0.0;
 	private static final float CUTOFF_RESET_SPEED = 20.0f;
 	private boolean cutOutActive = false;
+	private boolean yawInitialized = false;
+	private float yaw = 0.0f;
+	private float lastSentYaw = Float.NaN;
+	private long lastSyncTick = 0L;
 	private static final float CUT_IN_SPEED = 3.0f;
 	private static final float RATED_SPEED = 12.0f;
 	private static final float CUTOFF_SPEED = 22.0f;
+	private static final float YAW_STEP = 0.25f;
+	private static final float YAW_DEADBAND = 7.5f;
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -131,7 +138,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	private void updateGeneratedPower() {
-		float effectiveWindSpeed = Math.max(0.0f, lastEffectiveWindSpeed);
+		float effectiveWindSpeed = Math.max(0.0f, lastAlignedWindSpeed);
 		if (cutOutActive || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= CUTOFF_SPEED) {
 			generatedPower = 0.0;
 			return;
@@ -197,9 +204,14 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		float sustained = (float) weather.windSpeed();
 		float gust = (float) weather.gustSpeed();
 		float blend = Mth.clamp((float) weather.turbulence(), 0.0f, 1.0f);
+
 		lastEffectiveWindSpeed = Mth.lerp(blend, sustained, gust);
 		windDirection = weather.direction();
 		turbulence = weather.turbulence();
+
+		updateYaw();
+		float alignment = alignmentFactor();
+		lastAlignedWindSpeed = lastEffectiveWindSpeed * alignment;
 
 		if (lastEffectiveWindSpeed >= CUTOFF_SPEED) {
 			cutOutActive = true;
@@ -207,12 +219,10 @@ public class WindTurbineBlockEntity extends BlockEntity {
 			cutOutActive = false;
 		}
 
-		updateRotorSpeeds(lastEffectiveWindSpeed, turbulence, cutOutActive);
+		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, cutOutActive);
 		updateGeneratedPower();
 
-		if ((level.getGameTime() & 3L) == 0) {
-			syncStateToClients();
-		}
+		maybeSync();
 	}
 
 	@Override
@@ -240,7 +250,11 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		generatedPower = tag.getDouble("generatedPower");
 		currentPower = tag.getDouble("currentPower");
 		lastEffectiveWindSpeed = tag.getFloat("lastEffectiveWindSpeed");
+		lastAlignedWindSpeed = tag.contains("lastAlignedWindSpeed") ? tag.getFloat("lastAlignedWindSpeed") : lastEffectiveWindSpeed;
 		cutOutActive = tag.contains("cutOutActive") && tag.getBoolean("cutOutActive");
+		yawInitialized = tag.contains("yaw");
+		yaw = yawInitialized ? tag.getFloat("yaw") : yaw;
+
 		windDirection = tag.getFloat("windDirection");
 		turbulence = tag.contains("turbulence") ? tag.getDouble("turbulence") : 0.0;
 
@@ -259,6 +273,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	@Override
 	protected void saveAdditional(@Nonnull CompoundTag tag) {
 		super.saveAdditional(tag);
+		ensureYawInitialized();
 
 		ListTag positionsList = new ListTag();
 		for (Vec3 pos : wirePositions) {
@@ -283,7 +298,9 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		tag.putDouble("generatedPower", generatedPower);
 		tag.putDouble("currentPower", currentPower);
 		tag.putFloat("lastEffectiveWindSpeed", lastEffectiveWindSpeed);
+		tag.putFloat("lastAlignedWindSpeed", lastAlignedWindSpeed);
 		tag.putBoolean("cutOutActive", cutOutActive);
+		tag.putFloat("yaw", yaw);
 		tag.putFloat("windDirection", windDirection);
 		tag.putDouble("turbulence", turbulence);
 	}
@@ -360,7 +377,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	private void clientVisualTick() {
-		float effectiveSpeed = lastEffectiveWindSpeed;
+		float effectiveSpeed = lastAlignedWindSpeed;
 		float currentTime = level.getGameTime() + level.getGameTime() * 0.05f;
 		advanceRotations(currentTime, effectiveSpeed);
 	}
@@ -385,5 +402,61 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		rotation2 = (rotation2 + appliedSpeed2 * variation2) % 360.0f;
 		if (rotation1 < 0) rotation1 += 360.0f;
 		if (rotation2 < 0) rotation2 += 360.0f;
+	}
+
+	private void updateYaw() {
+		if (!yawInitialized) {
+			Direction facing = getBlockState().getValue(WindTurbineBlock.FACING);
+			yaw = baseFacingYaw(facing);
+			yawInitialized = true;
+		}
+
+		float target = windDirection;
+		float delta = Mth.wrapDegrees(target - yaw);
+		if (Math.abs(delta) <= YAW_DEADBAND) return;
+		float step = Mth.clamp(delta, -YAW_STEP, YAW_STEP);
+		yaw = Mth.wrapDegrees(yaw + step);
+	}
+
+	private float alignmentFactor() {
+		float delta = Math.abs(Mth.wrapDegrees(windDirection - yaw));
+		if (delta >= 90.0f) return 0.0f;
+		float cos = (float) Math.cos(Math.toRadians(delta));
+		if (cos <= 0.0f) return 0.0f;
+		return cos * cos * cos;
+	}
+
+	private static float baseFacingYaw(Direction facing) {
+		return switch (facing) {
+			case EAST -> 90.0f;
+			case SOUTH -> 0.0f;
+			case WEST -> 270.0f;
+			default -> 180.0f;
+		};
+	}
+
+	public float getYaw() {
+		ensureYawInitialized();
+		return yaw;
+	}
+
+	private void maybeSync() {
+		if (level == null || level.isClientSide) return;
+		long gameTime = level.getGameTime();
+		float delta = Float.isNaN(lastSentYaw) ? Float.MAX_VALUE : Math.abs(Mth.wrapDegrees(yaw - lastSentYaw));
+		boolean shouldSync = delta > 1.0f || gameTime - lastSyncTick >= 10;
+
+		if (shouldSync) {
+			lastSentYaw = yaw;
+			lastSyncTick = gameTime;
+			syncStateToClients();
+		}
+	}
+
+	private void ensureYawInitialized() {
+		if (yawInitialized) return;
+		Direction facing = getBlockState().getValue(WindTurbineBlock.FACING);
+		yaw = baseFacingYaw(facing);
+		yawInitialized = true;
 	}
 }

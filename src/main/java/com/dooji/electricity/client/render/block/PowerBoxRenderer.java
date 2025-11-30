@@ -49,7 +49,7 @@ public class PowerBoxRenderer {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/power_box/power_box.obj");
+		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/power_box/power_box.obj");
 		ObjBlockRegistry.register(Electricity.POWER_BOX_BLOCK.get(), modelLocation, null);
 
 		ObjInteractionRegistry.register(Electricity.POWER_BOX_BLOCK.get(), "insulator_Material", null);
@@ -58,7 +58,7 @@ public class PowerBoxRenderer {
 	}
 
 	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/power_box/power_box.obj"));
+		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/power_box/power_box.obj"));
 		if (model == null) {
 			LOGGER.error("Failed to load Power Box model");
 			return;

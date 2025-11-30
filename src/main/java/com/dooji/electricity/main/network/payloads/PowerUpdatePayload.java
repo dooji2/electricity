@@ -5,7 +5,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 
 public record PowerUpdatePayload(BlockPos blockPos, double power) {
-	public static final ResourceLocation ID = ResourceLocation.fromNamespaceAndPath("electricity", "power_update");
+public static final ResourceLocation ID = new ResourceLocation("electricity", "power_update");
 
 	public PowerUpdatePayload(FriendlyByteBuf buf) {
 		this(buf.readBlockPos(), buf.readDouble());

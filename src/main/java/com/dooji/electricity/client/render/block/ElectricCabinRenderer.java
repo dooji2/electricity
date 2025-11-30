@@ -49,7 +49,7 @@ public class ElectricCabinRenderer {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/electric_cab/cab.obj");
+		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/electric_cab/cab.obj");
 		ObjBlockRegistry.register(Electricity.ELECTRIC_CABIN_BLOCK.get(), modelLocation, null);
 
 		ObjInteractionRegistry.register(Electricity.ELECTRIC_CABIN_BLOCK.get(), "insulator_input_Material.065", null);
@@ -59,7 +59,7 @@ public class ElectricCabinRenderer {
 	}
 
 	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(ResourceLocation.fromNamespaceAndPath(Electricity.MOD_ID, "models/electric_cab/cab.obj"));
+		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/electric_cab/cab.obj"));
 		if (model == null) {
 			LOGGER.error("Failed to load Electric Cabin model");
 			return;

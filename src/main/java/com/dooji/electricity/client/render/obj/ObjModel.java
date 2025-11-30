@@ -116,14 +116,14 @@ public class ObjModel {
 		for (String mtlFileName : obj.getMtlFileNames()) {
 			try {
 				String relativePath = baseDirectory.isEmpty() ? mtlFileName : baseDirectory + mtlFileName;
-				ResourceLocation mtlLocation = ResourceLocation.fromNamespaceAndPath(namespace, relativePath);
+				ResourceLocation mtlLocation = new ResourceLocation(namespace, relativePath);
 				InputStream stream = Minecraft.getInstance().getResourceManager().getResource(mtlLocation).orElseThrow().open();
 
 				List<Mtl> mtls = MtlReader.read(stream);
 				for (Mtl mtl : mtls) {
 					ResourceLocation texture = null;
 					if (mtl.getMapKd() != null && !mtl.getMapKd().isEmpty()) {
-						texture = ResourceLocation.fromNamespaceAndPath("electricity", "textures/block/" + mtl.getMapKd());
+						texture = new ResourceLocation("electricity", "textures/block/" + mtl.getMapKd());
 					}
 					materials.put(mtl.getName(), new ObjMaterial(mtl.getName(), texture));
 				}
