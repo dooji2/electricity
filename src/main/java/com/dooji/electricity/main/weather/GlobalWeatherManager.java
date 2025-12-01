@@ -23,7 +23,7 @@ public final class GlobalWeatherManager {
 	private static final long PRUNE_AGE_TICKS = 24000;
 	private static final long ACTIVE_AGE_TICKS = 2400;
 	private static final double WIND_MIN = 0.2;
-	private static final double WIND_MAX = 18.0;
+	private static final double WIND_MAX = 24.0;
 	private final ServerLevel level;
 	private final Map<Long, WeatherCell> cells = new ConcurrentHashMap<>();
 	private int tickCounter = 0;
@@ -92,10 +92,19 @@ public final class GlobalWeatherManager {
 
 		flowDirection = wrapDegrees(flowDirection + 0.05f * Mth.sin((level.getGameTime() + flowDirectionSeed) / 2400.0f));
 
+		Map<Long, WeatherCell> snapshot = new HashMap<>(cells.size());
+		for (Map.Entry<Long, WeatherCell> entry : cells.entrySet()) {
+			WeatherCell src = entry.getValue();
+			WeatherCell copy = new WeatherCell(src.seed, src.zoneX, src.zoneZ, src.direction, src.windSpeed, src.turbulence, src.phase, src.stormIntensity, src.moistureStore);
+			copy.targetWindSpeed = src.targetWindSpeed;
+			copy.lastTouched = src.lastTouched;
+			snapshot.put(entry.getKey(), copy);
+		}
+
 		long now = level.getGameTime();
 		for (WeatherCell cell : cells.values()) {
 			if (now - cell.lastTouched > ACTIVE_AGE_TICKS && !zoneHasLoadedChunks(cell.zoneX, cell.zoneZ)) continue;
-			updateCell(cell);
+			updateCell(cell, snapshot);
 		}
 
 		if (tickCounter % PRUNE_INTERVAL == 0) {
@@ -134,11 +143,6 @@ public final class GlobalWeatherManager {
 		return cell;
 	}
 
-	private WeatherCell getExistingCell(int zoneX, int zoneZ) {
-		long key = (((long) zoneX) << 32) ^ (zoneZ & 0xffffffffL);
-		return cells.get(key);
-	}
-
 	private WeatherCell createCell(int zoneX, int zoneZ) {
 		long seed = mixSeed(zoneX, zoneZ);
 		XoroshiroRandomSource random = new XoroshiroRandomSource(seed);
@@ -163,7 +167,7 @@ public final class GlobalWeatherManager {
 		return created;
 	}
 
-	private void updateCell(WeatherCell cell) {
+	private void updateCell(WeatherCell cell, Map<Long, WeatherCell> snapshot) {
 		BlockPos center = new BlockPos(getZoneCenter(cell.zoneX, cell.zoneZ));
 		double rainForcing = samplePrecipitation(center);
 		boolean thunder = level.isThundering() && rainForcing > 0.25;
@@ -173,64 +177,69 @@ public final class GlobalWeatherManager {
 			surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, center.getX(), center.getZ());
 		}
 
+		double seaLevel = level.getSeaLevel();
+		double altitude = surfaceY - seaLevel;
+		double altitudeBias = Mth.clamp(altitude / 70.0, -0.3, 1.2);
+
 		BlockPos tempPos = new BlockPos(center.getX(), surfaceY, center.getZ());
 		var biomeHolder = level.getBiome(tempPos);
 		var climate = biomeHolder.value().getModifiedClimateSettings();
 		float temperature = climate.temperatureModifier().modifyTemperature(tempPos, climate.temperature());
 
 		double coldBias = Mth.clamp(1.0 - temperature, 0.0, 1.5);
-		double heatBias = Mth.clamp(temperature - 1.1, 0.0, 1.0);
-
-		double moistureInput = 0.08 + rainForcing * 0.55 + (thunder ? 0.3 : 0.0) + coldBias * 0.12 - heatBias * 0.1;
-		moistureInput = Mth.clamp(moistureInput, 0.0, 1.0);
-
-		double upstream = sampleUpstreamStorm(cell);
-		double neighborBlend = sampleNeighborStorm(cell);
-		float heading = flowHeading(cell.zoneX, cell.zoneZ, level.getGameTime() + cell.seed);
-
-		double advectFactor = 0.45 + Mth.clamp(cell.windSpeed / 18.0, 0.0, 1.0) * 0.55;
-		double advectDist = advectFactor * 0.8;
-
-		double advectX = Math.cos(Math.toRadians(heading)) * advectDist;
-		double advectZ = Math.sin(Math.toRadians(heading)) * advectDist;
-
-		double advectedStorm = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, STORM_EXTRACTOR);
-		double advectedWind = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, WIND_EXTRACTOR);
-		double advectedTurb = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, TURB_EXTRACTOR);
+		double heatBias = Mth.clamp(temperature - 1.05, 0.0, 1.0);
 
 		double time = level.getGameTime() + cell.seed;
 		double synoptic = 0.5 + 0.5 * Math.sin(time / 3600.0 + cell.phase);
 		double pulse = 0.5 + 0.5 * Math.sin(time / 2000.0 + cell.phase * 0.7);
 
-		double growth = moistureInput * (0.35 + synoptic * 0.4) + upstream * 0.35 + neighborBlend * 0.2 + pulse * 0.05;
-		double decay = 0.015 + heatBias * 0.01 + cell.stormIntensity * 0.02;
+		double moistureInput = 0.12 + rainForcing * 0.22 + (thunder ? 0.12 : 0.0) + coldBias * 0.12 - heatBias * 0.08 + synoptic * 0.08;
+		moistureInput = Mth.clamp(moistureInput, 0.0, 1.0);
 
-		cell.moistureStore = Mth.clamp(Mth.lerp(0.5, cell.moistureStore, moistureInput), 0.0, 1.0);
+		double upstream = sampleUpstreamStorm(cell);
+		double neighborBlend = sampleNeighborStorm(cell, snapshot);
+		float heading = flowHeading(cell.zoneX, cell.zoneZ, time);
+
+		double advectFactor = 0.45 + Mth.clamp(cell.windSpeed / WIND_MAX, 0.0, 1.0) * 0.55;
+		double advectDist = advectFactor * 0.9;
+
+		double advectX = Math.cos(Math.toRadians(heading)) * advectDist;
+		double advectZ = Math.sin(Math.toRadians(heading)) * advectDist;
+
+		double advectedStorm = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, snapshot, STORM_EXTRACTOR);
+		double advectedWind = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, snapshot, WIND_EXTRACTOR);
+		double advectedTurb = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, snapshot, TURB_EXTRACTOR);
+
+		double growth = moistureInput * (0.4 + synoptic * 0.28) + upstream * 0.42 + neighborBlend * 0.28 + pulse * 0.1 + altitudeBias * 0.1;
+		double decay = 0.008 + heatBias * 0.01 + cell.stormIntensity * 0.016;
+
+		cell.moistureStore = Mth.clamp(Mth.lerp(0.55, cell.moistureStore, moistureInput), 0.0, 1.0);
 		double stormTarget = Mth.clamp(cell.stormIntensity + growth - decay, 0.0, 1.0);
-		stormTarget = Mth.lerp(0.25, stormTarget, advectedStorm);
-		cell.stormIntensity = Mth.lerp(0.35, cell.stormIntensity, stormTarget);
+		stormTarget = Mth.lerp(0.35, stormTarget, advectedStorm);
+		cell.stormIntensity = Mth.lerp(0.45, cell.stormIntensity, stormTarget);
 
-		double calmFloor = 2.0 + coldBias * 0.8 - heatBias * 0.6;
-		double convective = 10.0 * cell.stormIntensity;
-		double baseMax = 6.5 + convective + rainForcing * 3.0;
+		double calmFloor = 2.2 + coldBias * 0.8 - heatBias * 0.5 + altitudeBias * 1.2;
+		double convective = 11.0 * cell.stormIntensity;
+		double stormJet = cell.stormIntensity * 6.0;
+		double baseMax = 7.0 + convective + stormJet + rainForcing * 1.1 + altitudeBias * 2.2;
 		if (thunder) {
-			baseMax += 4.5 * cell.stormIntensity;
+			baseMax += 3.5 * cell.stormIntensity;
 		}
 
-		double shaping = Mth.clamp(0.55 + 0.35 * synoptic + 0.1 * pulse, 0.0, 1.0);
+		double shaping = Mth.clamp(0.55 + 0.3 * synoptic + 0.12 * pulse + altitudeBias * 0.08 + cell.stormIntensity * 0.12, 0.0, 1.0);
 		double target = calmFloor + (baseMax - calmFloor) * shaping;
 		target = Mth.clamp(target, WIND_MIN, WIND_MAX);
 
-		double advectedTarget = Mth.lerp(0.35, target, advectedWind / Math.max(0.001, WIND_MAX));
-		double blendedTarget = Mth.lerp(0.25, advectedTarget, sampleNeighborWind(cell, target));
+		double advectedTarget = Mth.lerp(0.38, target, advectedWind);
+		double blendedTarget = Mth.lerp(0.25, advectedTarget, sampleNeighborWind(cell, target, snapshot));
 
-		cell.targetWindSpeed = Mth.lerp(0.2, cell.targetWindSpeed, blendedTarget);
-		cell.windSpeed = Mth.lerp(0.18, cell.windSpeed, cell.targetWindSpeed);
+		cell.targetWindSpeed = Mth.lerp(0.26, cell.targetWindSpeed, blendedTarget);
+		cell.windSpeed = Mth.lerp(0.22, cell.windSpeed, cell.targetWindSpeed);
 
-		double windBias = Mth.clamp(cell.windSpeed / 18.0, 0.0, 1.0);
-		double turbulenceTarget = Mth.clamp(0.07 + windBias * 0.18 + cell.stormIntensity * 0.35 + rainForcing * 0.15 + (thunder ? 0.08 * cell.stormIntensity : 0.0), 0.03, 1.0);
-		turbulenceTarget = Mth.lerp(0.25, turbulenceTarget, advectedTurb);
-		cell.turbulence = Mth.lerp(0.3, cell.turbulence, turbulenceTarget);
+		double windBias = Mth.clamp(cell.windSpeed / WIND_MAX, 0.0, 1.0);
+		double turbulenceTarget = Mth.clamp(0.08 + windBias * 0.2 + cell.stormIntensity * 0.35 + rainForcing * 0.08 + altitudeBias * 0.1 + (thunder ? 0.08 * cell.stormIntensity : 0.0), 0.03, 1.0);
+		turbulenceTarget = Mth.lerp(0.22, turbulenceTarget, advectedTurb);
+		cell.turbulence = Mth.lerp(0.32, cell.turbulence, turbulenceTarget);
 
 		float flowTarget = flowHeading(cell.zoneX, cell.zoneZ, time);
 		cell.direction = lerpAngle(cell.direction, flowTarget, 0.18f);
@@ -265,42 +274,42 @@ public final class GlobalWeatherManager {
 		return new BlockPos(blockX, 64, blockZ);
 	}
 
-	private double sampleNeighborWind(WeatherCell cell, double target) {
+	private double sampleNeighborWind(WeatherCell cell, double target, Map<Long, WeatherCell> snapshot) {
 		double total = target;
 		int count = 1;
 		int zoneX = cell.zoneX;
 		int zoneZ = cell.zoneZ;
-		total += neighborWind(zoneX + 1, zoneZ);
-		total += neighborWind(zoneX - 1, zoneZ);
-		total += neighborWind(zoneX, zoneZ + 1);
-		total += neighborWind(zoneX, zoneZ - 1);
+		total += neighborWind(zoneX + 1, zoneZ, snapshot);
+		total += neighborWind(zoneX - 1, zoneZ, snapshot);
+		total += neighborWind(zoneX, zoneZ + 1, snapshot);
+		total += neighborWind(zoneX, zoneZ - 1, snapshot);
 		count += 4;
 		return total / count;
 	}
 
-	private double neighborWind(int zoneX, int zoneZ) {
+	private double neighborWind(int zoneX, int zoneZ, Map<Long, WeatherCell> snapshot) {
 		long key = (((long) zoneX) << 32) ^ (zoneZ & 0xffffffffL);
-		WeatherCell cell = cells.get(key);
+		WeatherCell cell = snapshot.get(key);
 		if (cell != null) return cell.windSpeed;
 		return targetForCoordinates(zoneX, zoneZ);
 	}
 
-	private double sampleNeighborStorm(WeatherCell cell) {
+	private double sampleNeighborStorm(WeatherCell cell, Map<Long, WeatherCell> snapshot) {
 		double total = 0.0;
 		int count = 0;
 		int zoneX = cell.zoneX;
 		int zoneZ = cell.zoneZ;
-		total += neighborStorm(zoneX + 1, zoneZ);
-		total += neighborStorm(zoneX - 1, zoneZ);
-		total += neighborStorm(zoneX, zoneZ + 1);
-		total += neighborStorm(zoneX, zoneZ - 1);
+		total += neighborStorm(zoneX + 1, zoneZ, snapshot);
+		total += neighborStorm(zoneX - 1, zoneZ, snapshot);
+		total += neighborStorm(zoneX, zoneZ + 1, snapshot);
+		total += neighborStorm(zoneX, zoneZ - 1, snapshot);
 		count += 4;
 		return count == 0 ? 0.0 : total / count;
 	}
 
-	private double neighborStorm(int zoneX, int zoneZ) {
+	private double neighborStorm(int zoneX, int zoneZ, Map<Long, WeatherCell> snapshot) {
 		long key = (((long) zoneX) << 32) ^ (zoneZ & 0xffffffffL);
-		WeatherCell cell = cells.get(key);
+		WeatherCell cell = snapshot.get(key);
 		if (cell != null) return cell.stormIntensity;
 		return 0.0;
 	}
@@ -337,7 +346,7 @@ public final class GlobalWeatherManager {
 		return wrapped;
 	}
 
-	private double sampleField(double zoneX, double zoneZ, ToDoubleFunction<WeatherCell> extractor) {
+	private double sampleField(double zoneX, double zoneZ, Map<Long, WeatherCell> snapshot, ToDoubleFunction<WeatherCell> extractor) {
 		int x0 = (int) Math.floor(zoneX);
 		int z0 = (int) Math.floor(zoneZ);
 		int x1 = x0 + 1;
@@ -345,18 +354,18 @@ public final class GlobalWeatherManager {
 		double tx = zoneX - x0;
 		double tz = zoneZ - z0;
 
-		double c00 = sampleCellValue(x0, z0, extractor);
-		double c10 = sampleCellValue(x1, z0, extractor);
-		double c01 = sampleCellValue(x0, z1, extractor);
-		double c11 = sampleCellValue(x1, z1, extractor);
+		double c00 = sampleCellValue(x0, z0, snapshot, extractor);
+		double c10 = sampleCellValue(x1, z0, snapshot, extractor);
+		double c01 = sampleCellValue(x0, z1, snapshot, extractor);
+		double c11 = sampleCellValue(x1, z1, snapshot, extractor);
 
 		double a = Mth.lerp(tx, c00, c10);
 		double b = Mth.lerp(tx, c01, c11);
 		return Mth.lerp(tz, a, b);
 	}
 
-	private double sampleCellValue(int zoneX, int zoneZ, ToDoubleFunction<WeatherCell> extractor) {
-		WeatherCell cell = getExistingCell(zoneX, zoneZ);
+	private double sampleCellValue(int zoneX, int zoneZ, Map<Long, WeatherCell> snapshot, ToDoubleFunction<WeatherCell> extractor) {
+		WeatherCell cell = snapshot.get((((long) zoneX) << 32) ^ (zoneZ & 0xffffffffL));
 		if (cell != null) return extractor.applyAsDouble(cell);
 		if (extractor == WIND_EXTRACTOR || extractor == GUST_EXTRACTOR) return targetForCoordinates(zoneX, zoneZ);
 		if (extractor == TURB_EXTRACTOR) return 0.08;
