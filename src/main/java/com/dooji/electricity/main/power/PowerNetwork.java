@@ -309,6 +309,7 @@ public class PowerNetwork {
 		for (PowerConnection connection : powerConnections.values()) {
 			if (connection.startNode.insulatorId == fromNodeId) {
 				boolean sameBlockPos = connection.startNode.position.equals(connection.endNode.position);
+				if (!canTransfer(connection.startNode, connection.endNode)) continue;
 
 				if ("output".equals(connection.startPowerType) && ("input".equals(connection.endPowerType) || "bidirectional".equals(connection.endPowerType))) {
 					connections.add(connection);
@@ -319,6 +320,7 @@ public class PowerNetwork {
 				}
 			} else if (connection.endNode.insulatorId == fromNodeId) {
 				boolean sameBlockPos = connection.startNode.position.equals(connection.endNode.position);
+				if (!canTransfer(connection.endNode, connection.startNode)) continue;
 
 				if ("output".equals(connection.endPowerType) && ("input".equals(connection.startPowerType) || "bidirectional".equals(connection.startPowerType))) {
 					connections.add(connection);
@@ -472,6 +474,25 @@ public class PowerNetwork {
 			this.connection = connection;
 			this.sourceNode = sourceNode;
 		}
+	}
+
+	private boolean canTransfer(PowerNode from, PowerNode to) {
+		BlockEntity a = from.blockEntity;
+		BlockEntity b = to.blockEntity;
+
+		if (a instanceof WindTurbineBlockEntity) {
+			return b instanceof ElectricCabinBlockEntity || b instanceof WindTurbineBlockEntity;
+		}
+
+		if (a instanceof ElectricCabinBlockEntity) {
+			return b instanceof UtilityPoleBlockEntity;
+		}
+
+		if (a instanceof UtilityPoleBlockEntity) {
+			return b instanceof UtilityPoleBlockEntity || b instanceof PowerBoxBlockEntity;
+		}
+
+		return false;
 	}
 
 	private static class TargetGroup {
