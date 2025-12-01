@@ -22,7 +22,7 @@
   "screen.electricity.utility_pole_config.yaw": "Yaw (deg):",
   "screen.electricity.utility_pole_config.pitch": "Pitch (deg):",
   "tooltip.electricity.power.generated": "Generated: %s kW",
-  "tooltip.electricity.power.current": "Current: %s kW",
+  "tooltip.electricity.power.network": "Network: %s kW",
   "tooltip.electricity.power.amount": "Power: %s kW",
   "message.electricity.wire.failed_insulator": "Failed to resolve one of the insulators.",
   "message.electricity.wire.too_far": "Those insulators are too far apart (%s m > %s m).",

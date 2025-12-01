@@ -221,10 +221,17 @@ public class ObjRaycaster {
 
 	public static List<Component> getPowerDisplayText(BlockEntity blockEntity) {
 		if (blockEntity instanceof WindTurbineBlockEntity turbine) {
+			double generated = turbine.getGeneratedPower();
+			double current = turbine.getCurrentPower();
+			if (current > generated + 0.1) {
+				return List.of(
+						blockEntity.getBlockState().getBlock().getName(),
+						Component.translatable("tooltip.electricity.power.generated", formatPower(generated)),
+						Component.translatable("tooltip.electricity.power.network", formatPower(current)));
+			}
 			return List.of(
 					blockEntity.getBlockState().getBlock().getName(),
-					Component.translatable("tooltip.electricity.power.generated", formatPower(turbine.getGeneratedPower())),
-					Component.translatable("tooltip.electricity.power.current", formatPower(turbine.getCurrentPower())));
+					Component.translatable("tooltip.electricity.power.generated", formatPower(generated)));
 		} else if (blockEntity instanceof ElectricCabinBlockEntity cabin) {
 			return List.of(
 					blockEntity.getBlockState().getBlock().getName(),
