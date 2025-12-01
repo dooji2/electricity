@@ -3,7 +3,7 @@ package com.dooji.electricity.main.weather;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
-
+import java.util.function.ToDoubleFunction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
@@ -30,6 +30,10 @@ public final class GlobalWeatherManager {
 	private final float flowDirectionSeed;
 	private float flowDirection;
 	private final WeatherSavedData savedData;
+	private static final ToDoubleFunction<WeatherCell> WIND_EXTRACTOR = c -> c.windSpeed;
+	private static final ToDoubleFunction<WeatherCell> GUST_EXTRACTOR = WeatherCell::gustSpeed;
+	private static final ToDoubleFunction<WeatherCell> TURB_EXTRACTOR = c -> c.turbulence;
+	private static final ToDoubleFunction<WeatherCell> STORM_EXTRACTOR = c -> c.stormIntensity;
 
 	private static final class WeatherCell {
 		double windSpeed;
@@ -130,6 +134,11 @@ public final class GlobalWeatherManager {
 		return cell;
 	}
 
+	private WeatherCell getExistingCell(int zoneX, int zoneZ) {
+		long key = (((long) zoneX) << 32) ^ (zoneZ & 0xffffffffL);
+		return cells.get(key);
+	}
+
 	private WeatherCell createCell(int zoneX, int zoneZ) {
 		long seed = mixSeed(zoneX, zoneZ);
 		XoroshiroRandomSource random = new XoroshiroRandomSource(seed);
@@ -177,6 +186,17 @@ public final class GlobalWeatherManager {
 
 		double upstream = sampleUpstreamStorm(cell);
 		double neighborBlend = sampleNeighborStorm(cell);
+		float heading = flowHeading(cell.zoneX, cell.zoneZ, level.getGameTime() + cell.seed);
+
+		double advectFactor = 0.45 + Mth.clamp(cell.windSpeed / 18.0, 0.0, 1.0) * 0.55;
+		double advectDist = advectFactor * 0.8;
+
+		double advectX = Math.cos(Math.toRadians(heading)) * advectDist;
+		double advectZ = Math.sin(Math.toRadians(heading)) * advectDist;
+
+		double advectedStorm = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, STORM_EXTRACTOR);
+		double advectedWind = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, WIND_EXTRACTOR);
+		double advectedTurb = sampleField(cell.zoneX - advectX, cell.zoneZ - advectZ, TURB_EXTRACTOR);
 
 		double time = level.getGameTime() + cell.seed;
 		double synoptic = 0.5 + 0.5 * Math.sin(time / 3600.0 + cell.phase);
@@ -187,6 +207,7 @@ public final class GlobalWeatherManager {
 
 		cell.moistureStore = Mth.clamp(Mth.lerp(0.5, cell.moistureStore, moistureInput), 0.0, 1.0);
 		double stormTarget = Mth.clamp(cell.stormIntensity + growth - decay, 0.0, 1.0);
+		stormTarget = Mth.lerp(0.25, stormTarget, advectedStorm);
 		cell.stormIntensity = Mth.lerp(0.35, cell.stormIntensity, stormTarget);
 
 		double calmFloor = 2.0 + coldBias * 0.8 - heatBias * 0.6;
@@ -200,13 +221,15 @@ public final class GlobalWeatherManager {
 		double target = calmFloor + (baseMax - calmFloor) * shaping;
 		target = Mth.clamp(target, WIND_MIN, WIND_MAX);
 
-		double blendedTarget = Mth.lerp(0.25, target, sampleNeighborWind(cell, target));
+		double advectedTarget = Mth.lerp(0.35, target, advectedWind / Math.max(0.001, WIND_MAX));
+		double blendedTarget = Mth.lerp(0.25, advectedTarget, sampleNeighborWind(cell, target));
 
 		cell.targetWindSpeed = Mth.lerp(0.2, cell.targetWindSpeed, blendedTarget);
 		cell.windSpeed = Mth.lerp(0.18, cell.windSpeed, cell.targetWindSpeed);
 
 		double windBias = Mth.clamp(cell.windSpeed / 18.0, 0.0, 1.0);
 		double turbulenceTarget = Mth.clamp(0.07 + windBias * 0.18 + cell.stormIntensity * 0.35 + rainForcing * 0.15 + (thunder ? 0.08 * cell.stormIntensity : 0.0), 0.03, 1.0);
+		turbulenceTarget = Mth.lerp(0.25, turbulenceTarget, advectedTurb);
 		cell.turbulence = Mth.lerp(0.3, cell.turbulence, turbulenceTarget);
 
 		float flowTarget = flowHeading(cell.zoneX, cell.zoneZ, time);
@@ -312,6 +335,33 @@ public final class GlobalWeatherManager {
 		float wrapped = degrees % 360.0f;
 		if (wrapped < 0) wrapped += 360.0f;
 		return wrapped;
+	}
+
+	private double sampleField(double zoneX, double zoneZ, ToDoubleFunction<WeatherCell> extractor) {
+		int x0 = (int) Math.floor(zoneX);
+		int z0 = (int) Math.floor(zoneZ);
+		int x1 = x0 + 1;
+		int z1 = z0 + 1;
+		double tx = zoneX - x0;
+		double tz = zoneZ - z0;
+
+		double c00 = sampleCellValue(x0, z0, extractor);
+		double c10 = sampleCellValue(x1, z0, extractor);
+		double c01 = sampleCellValue(x0, z1, extractor);
+		double c11 = sampleCellValue(x1, z1, extractor);
+
+		double a = Mth.lerp(tx, c00, c10);
+		double b = Mth.lerp(tx, c01, c11);
+		return Mth.lerp(tz, a, b);
+	}
+
+	private double sampleCellValue(int zoneX, int zoneZ, ToDoubleFunction<WeatherCell> extractor) {
+		WeatherCell cell = getExistingCell(zoneX, zoneZ);
+		if (cell != null) return extractor.applyAsDouble(cell);
+		if (extractor == WIND_EXTRACTOR || extractor == GUST_EXTRACTOR) return targetForCoordinates(zoneX, zoneZ);
+		if (extractor == TURB_EXTRACTOR) return 0.08;
+		if (extractor == STORM_EXTRACTOR) return 0.02;
+		return 0.0;
 	}
 
 	private float lerpAngle(float current, float target, float alpha) {
