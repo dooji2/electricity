@@ -2,6 +2,7 @@
   "itemGroup.electricity.main": "Electricity",
   "item.electricity.wire": "Wire",
   "item.electricity.power_wrench": "Power Wrench",
+  "item.electricity.weather_tablet": "Weather Tablet",
   "block.electricity.utility_pole": "Utility Pole",
   "block.electricity.electric_cabin": "Electric Cabin",
   "block.electricity.power_box": "Power Box",

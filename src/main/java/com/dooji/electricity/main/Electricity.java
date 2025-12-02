@@ -73,6 +73,7 @@ public class Electricity {
 	public static final RegistryObject<Item> POWER_BOX_ITEM = ITEMS.register("power_box", () -> new BlockItem(POWER_BOX_BLOCK.get(), new Item.Properties()));
 	public static final RegistryObject<Item> WIND_TURBINE_ITEM = ITEMS.register("wind_turbine", () -> new BlockItem(WIND_TURBINE_BLOCK.get(), new Item.Properties()));
 	public static final RegistryObject<Item> ELECTRIC_LAMP_ITEM = ITEMS.register("electric_lamp", () -> new BlockItem(ELECTRIC_LAMP_BLOCK.get(), new Item.Properties()));
+	public static final RegistryObject<Item> WEATHER_TABLET_ITEM = ITEMS.register("weather_tablet", () -> new Item(new Item.Properties().stacksTo(1)));
 
 	public static final RegistryObject<CreativeModeTab> ELECTRICITY_TAB = CREATIVE_TABS.register("main",
 			() -> CreativeModeTab.builder().title(Component.translatable("itemGroup." + MOD_ID + ".main")).icon(() -> new ItemStack(WIRE_ITEM.get())).displayItems((parameters, output) -> {
@@ -83,6 +84,7 @@ public class Electricity {
 				output.accept(POWER_BOX_ITEM.get());
 				output.accept(WIND_TURBINE_ITEM.get());
 				output.accept(ELECTRIC_LAMP_ITEM.get());
+				output.accept(WEATHER_TABLET_ITEM.get());
 			}).build());
 
 	public static RegistryObject<BlockEntityType<UtilityPoleBlockEntity>> UTILITY_POLE_BLOCK_ENTITY;

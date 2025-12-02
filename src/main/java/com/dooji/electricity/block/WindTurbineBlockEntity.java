@@ -17,6 +17,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -200,7 +201,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 			return;
 		}
 
-		WeatherSnapshot weather = GlobalWeatherManager.get((net.minecraft.server.level.ServerLevel) level).sample(worldPosition);
+		WeatherSnapshot weather = GlobalWeatherManager.get((ServerLevel) level).sample(worldPosition);
 		float sustained = (float) weather.windSpeed();
 		float gust = (float) weather.gustSpeed();
 		float blend = Mth.clamp((float) weather.turbulence(), 0.0f, 1.0f);
