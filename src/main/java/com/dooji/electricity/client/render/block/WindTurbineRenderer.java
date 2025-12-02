@@ -9,16 +9,14 @@ import com.dooji.electricity.client.render.obj.ObjInteractionRegistry;
 import com.dooji.electricity.client.render.obj.ObjLoader;
 import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.render.obj.ObjRenderUtil;
-import com.dooji.electricity.client.render.obj.ObjRenderer;
+import com.dooji.electricity.client.render.obj.ObjRendererBase;
 import com.dooji.electricity.main.Electricity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
@@ -29,15 +27,17 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @OnlyIn(Dist.CLIENT) @Mod.EventBusSubscriber(modid = Electricity.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE, value = Dist.CLIENT)
-public class WindTurbineRenderer {
+public class WindTurbineRenderer extends ObjRendererBase {
 	private static final double MAX_RENDER_DISTANCE_SQ = 128 * 128;
 	private static final Logger LOGGER = LoggerFactory.getLogger(Electricity.MOD_ID);
 	private static final Map<BlockPos, Float> YAW_CACHE = new HashMap<>();
+	private static final Map<BlockPos, Map<String, GroupBuffer>> BUFFER_CACHE = new HashMap<>();
 
 	@SubscribeEvent
 	public static void onRenderLevel(RenderLevelStageEvent event) {
@@ -47,23 +47,23 @@ public class WindTurbineRenderer {
 		if (mc.level == null) return;
 
 		Vec3 cameraPos = mc.gameRenderer.getMainCamera().getPosition();
-		MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
-		Set<BlockPos> seen = new HashSet<>();
+		HashSet<BlockPos> seen = new HashSet<>();
 
 		for (WindTurbineBlockEntity turbine : TrackedBlockEntities.ofType(WindTurbineBlockEntity.class)) {
 			seen.add(turbine.getBlockPos());
-			ObjRenderUtil.withAlignedPose(turbine, event.getPoseStack(), bufferSource, cameraPos, MAX_RENDER_DISTANCE_SQ, state -> state.getValue(WindTurbineBlock.FACING),
+			ObjRenderUtil.withAlignedPose(turbine, event.getPoseStack(), mc.renderBuffers().bufferSource(), cameraPos, MAX_RENDER_DISTANCE_SQ, state -> state.getValue(WindTurbineBlock.FACING),
 					WindTurbineRenderer::rotationForTurbine,
-					(context, pose, buffers) -> renderWindTurbineWithAnimation(context.model(), pose, buffers, context.texture(), context.packedLight(), turbine));
+					(context, pose, buffers) -> renderWindTurbineWithAnimation(context.model(), pose, event.getProjectionMatrix(), context.texture(), context.packedLight(), turbine));
 		}
 
 		if (!YAW_CACHE.isEmpty() && !seen.isEmpty()) {
 			YAW_CACHE.keySet().removeIf(pos -> !seen.contains(pos));
 		}
-		bufferSource.endBatch();
+
+		cleanupCache(BUFFER_CACHE, seen);
 	}
 
-	private static void renderWindTurbineWithAnimation(ObjModel model, PoseStack poseStack, MultiBufferSource bufferSource, ResourceLocation textureLocation, int packedLight,
+	private static void renderWindTurbineWithAnimation(ObjModel model, PoseStack poseStack, Matrix4f projectionMatrix, ResourceLocation textureLocation, int packedLight,
 			WindTurbineBlockEntity blockEntity) {
 		float rotation1 = blockEntity.getRotation1();
 		float rotation2 = blockEntity.getRotation2();
@@ -88,9 +88,9 @@ public class WindTurbineRenderer {
 			poseStack.mulPose(Axis.YP.rotationDegrees(yawOffset));
 		}
 
+		Map<String, Matrix4f> poses = new HashMap<>();
 		for (Map.Entry<String, ObjModel.ObjGroup> entry : model.groups.entrySet()) {
 			String groupName = entry.getKey();
-			ObjModel.ObjGroup group = entry.getValue();
 
 			poseStack.pushPose();
 
@@ -104,10 +104,12 @@ public class WindTurbineRenderer {
 				poseStack.translate(-hubCenter.x, -hubCenter.y, -hubCenter.z);
 			}
 
-			ObjRenderer.renderGroup(group, poseStack, bufferSource, model, textureLocation, packedLight);
+			poses.put(groupName, new Matrix4f(poseStack.last().pose()));
+
 			poseStack.popPose();
 		}
 
+		renderGrouped(model, poses, projectionMatrix, textureLocation, packedLight, blockEntity.getBlockPos(), BUFFER_CACHE);
 		poseStack.popPose();
 	}
 
