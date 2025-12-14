@@ -36,6 +36,10 @@ import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.util.Mth;
+import net.minecraftforge.common.capabilities.Capability;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.energy.IEnergyStorage;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
@@ -53,6 +57,12 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	private int breakerCooldown = 0;
 	private final Set<BlockPos> poweredBlocks = new HashSet<>();
 	private boolean powerFieldActive = false;
+
+	private static final int FE_CAPACITY = 100000;
+	private static final int FE_TRANSFER_PER_TICK = 2000;
+	private static final double FE_PER_POWER_TICK = 50.0;
+	private int feBuffer = 0;
+	private final LazyOptional<IEnergyStorage> energy = LazyOptional.of(this::createEnergyStorage);
 
 	public PowerBoxBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -103,6 +113,18 @@ public class PowerBoxBlockEntity extends BlockEntity {
 
 	public double getCurrentPower() {
 		return currentPower;
+	}
+
+	public int getForgeEnergyStored() {
+		return Math.min(getEnergyStoredInternal(), FE_CAPACITY);
+	}
+
+	public int getForgeEnergyCapacity() {
+		return FE_CAPACITY;
+	}
+
+	public int getForgeTransferRate() {
+		return FE_TRANSFER_PER_TICK;
 	}
 
 	public void setCurrentPower(double power) {
@@ -163,6 +185,8 @@ public class PowerBoxBlockEntity extends BlockEntity {
 			breakerCooldown--;
 			if (breakerCooldown == 0) breakerTripped = false;
 		}
+
+		pushForgeEnergy();
 
 		boolean shouldActivate = currentPower > POWER_THRESHOLD;
 		if (shouldActivate && !powerFieldActive) {
@@ -393,6 +417,10 @@ public class PowerBoxBlockEntity extends BlockEntity {
 			currentPower = tag.getDouble("currentPower");
 		}
 
+		if (tag.contains("feBuffer")) {
+			feBuffer = tag.getInt("feBuffer");
+		}
+
 		updateWirePositions();
 	}
 
@@ -422,6 +450,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 
 		tag.put("insulatorIds", insulatorIdsList);
 		tag.putDouble("currentPower", currentPower);
+		tag.putInt("feBuffer", feBuffer);
 	}
 
 	@Override
@@ -442,6 +471,21 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	}
 
 	@Override
+	public <T> LazyOptional<T> getCapability(Capability<T> cap, Direction side) {
+		if (cap == ForgeCapabilities.ENERGY) {
+			return energy.cast();
+		}
+
+		return super.getCapability(cap, side);
+	}
+
+	@Override
+	public void invalidateCaps() {
+		super.invalidateCaps();
+		energy.invalidate();
+	}
+
+	@Override
 	public void onLoad() {
 		super.onLoad();
 		updateWirePositions();
@@ -450,6 +494,87 @@ public class PowerBoxBlockEntity extends BlockEntity {
 				TrackedBlockEntities.track(this);
 				InsulatorLookup.register(this);
 				WireManagerClient.invalidateInsulatorCache(this.getInsulatorIds());
+			});
+		}
+	}
+
+	private IEnergyStorage createEnergyStorage() {
+		return new IEnergyStorage() {
+			@Override
+			public int receiveEnergy(int maxReceive, boolean simulate) {
+				return 0;
+			}
+
+			@Override
+			public int extractEnergy(int maxExtract, boolean simulate) {
+				if (maxExtract <= 0) return 0;
+				int available = Math.min(getEnergyStoredInternal(), FE_CAPACITY);
+				int extracted = Math.min(maxExtract, available);
+
+				if (!simulate && extracted > 0) {
+					if (feBuffer >= extracted) {
+						feBuffer -= extracted;
+					} else {
+						int remaining = extracted - feBuffer;
+						feBuffer = 0;
+						double powerReduction = remaining / FE_PER_POWER_TICK;
+						currentPower = Math.max(0.0, currentPower - powerReduction);
+					}
+
+					setChanged();
+				}
+
+				return extracted;
+			}
+
+			@Override
+			public int getEnergyStored() {
+				return Math.min(getEnergyStoredInternal(), FE_CAPACITY);
+			}
+
+			@Override
+			public int getMaxEnergyStored() {
+				return FE_CAPACITY;
+			}
+
+			@Override
+			public boolean canExtract() {
+				return true;
+			}
+
+			@Override
+			public boolean canReceive() {
+				return false;
+			}
+		};
+	}
+
+	private int getEnergyStoredInternal() {
+		double powerEnergy = Math.max(0.0, currentPower) * FE_PER_POWER_TICK;
+		int stored = feBuffer + (int) Math.floor(powerEnergy);
+		return stored;
+	}
+
+	private void pushForgeEnergy() {
+		if (level == null) return;
+		IEnergyStorage storage = energy.orElse(null);
+		if (storage == null) return;
+
+		for (Direction direction : Direction.values()) {
+			if (storage.getEnergyStored() <= 0) break;
+
+			BlockEntity neighbor = level.getBlockEntity(worldPosition.relative(direction));
+			if (neighbor == null) continue;
+
+			neighbor.getCapability(ForgeCapabilities.ENERGY, direction.getOpposite()).ifPresent(target -> {
+				int available = Math.min(storage.getEnergyStored(), FE_TRANSFER_PER_TICK);
+				if (available <= 0) return;
+
+				int accepted = target.receiveEnergy(available, false);
+				if (accepted > 0) {
+					storage.extractEnergy(accepted, false);
+					setChanged();
+				}
 			});
 		}
 	}
