@@ -9,6 +9,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
+// OBJ pipeline code will be migrated to Renderix
 @OnlyIn(Dist.CLIENT)
 public class ObjInteractionRegistry {
 	private static final Map<Block, InteractionData> DATA = new HashMap<>();

@@ -9,6 +9,7 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import org.joml.Vector3f;
 
+// OBJ pipeline code will be migrated to Renderix
 @OnlyIn(Dist.CLIENT)
 public class ObjRenderer {
 	public static void render(ObjModel model, PoseStack poseStack, MultiBufferSource bufferSource, ResourceLocation texturePrefix, int packedLight) {

@@ -25,6 +25,7 @@
   "tooltip.electricity.power.generated": "Generated: %s kW",
   "tooltip.electricity.power.network": "Network: %s kW",
   "tooltip.electricity.power.amount": "Power: %s kW",
+  "tooltip.electricity.power.fe": "FE: %s / %s FE/t",
   "message.electricity.wire.failed_insulator": "Failed to resolve one of the insulators.",
   "message.electricity.wire.too_far": "Those insulators are too far apart (%s m > %s m).",
   "message.electricity.wire.connected": "Connected insulators %s <-> %s.",

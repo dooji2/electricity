@@ -6,6 +6,7 @@ import java.util.Map;
 import net.minecraft.world.level.block.Block;
 import org.joml.Vector3f;
 
+// OBJ pipeline code will be migrated to Renderix
 public class ObjBoundingBoxRegistry {
 	private static final Map<Block, Map<String, ObjModel.BoundingBox>> BOXES = new HashMap<>();
 

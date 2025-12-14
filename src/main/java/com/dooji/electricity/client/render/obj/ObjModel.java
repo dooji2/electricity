@@ -1,7 +1,13 @@
 package com.dooji.electricity.client.render.obj;
 
 import com.dooji.electricity.main.Electricity;
-import de.javagl.obj.*;
+import com.dooji.renderix.RenderixFace;
+import com.dooji.renderix.RenderixLoader;
+import com.dooji.renderix.RenderixMaterial;
+import com.dooji.renderix.RenderixMaterials;
+import com.dooji.renderix.RenderixMesh;
+import com.dooji.renderix.RenderixSplitter;
+import com.dooji.renderix.RenderixTessellator;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
@@ -11,6 +17,7 @@ import org.joml.Vector3f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+// OBJ pipeline code will be migrated to Renderix
 public class ObjModel {
 	private static final Logger LOGGER = LoggerFactory.getLogger("electricity");
 	public final Map<String, ObjGroup> groups = new HashMap<>();
@@ -56,42 +63,42 @@ public class ObjModel {
 	public static ObjModel loadFromStream(InputStream stream, ResourceLocation resourceLocation) {
 		ObjModel model = new ObjModel();
 		try {
-			Obj obj = ObjReader.read(stream);
-			Obj renderableObj = ObjUtils.convertToRenderable(obj);
+			RenderixMesh mesh = RenderixLoader.readObj(stream);
+			RenderixMesh renderableMesh = RenderixTessellator.toRenderable(mesh);
 
-			model.loadMaterials(obj, resourceLocation);
+			model.loadMaterials(mesh, resourceLocation);
 
-			Map<String, Obj> objectGroups = ObjSplitting.splitByGroups(renderableObj);
+			Map<String, RenderixMesh> objectGroups = RenderixSplitter.splitByObject(renderableMesh);
 
 			if (!objectGroups.isEmpty()) {
-				for (Map.Entry<String, Obj> entry : objectGroups.entrySet()) {
+				for (Map.Entry<String, RenderixMesh> entry : objectGroups.entrySet()) {
 					String objectName = entry.getKey();
-					Obj objectObj = entry.getValue();
+					RenderixMesh objectMesh = entry.getValue();
 
-					Map<String, Obj> materialGroups = ObjSplitting.splitByMaterialGroups(objectObj);
+					Map<String, RenderixMesh> materialGroups = RenderixSplitter.splitByMaterial(objectMesh);
 
-					for (Map.Entry<String, Obj> materialEntry : materialGroups.entrySet()) {
+					for (Map.Entry<String, RenderixMesh> materialEntry : materialGroups.entrySet()) {
 						String materialName = materialEntry.getKey();
-						Obj materialObj = materialEntry.getValue();
+						RenderixMesh materialMesh = materialEntry.getValue();
 
-						if (materialObj.getNumFaces() == 0) continue;
+						if (materialMesh.faceCount() == 0) continue;
 
 						ObjGroup group = new ObjGroup(objectName, materialName);
-						model.addDeindexedVertices(materialObj, group);
+						model.addDeindexedVertices(materialMesh, group);
 						model.groups.put(objectName + "_" + materialName, group);
 					}
 				}
 			} else {
-				Map<String, Obj> materialGroups = ObjSplitting.splitByMaterialGroups(renderableObj);
+				Map<String, RenderixMesh> materialGroups = RenderixSplitter.splitByMaterial(renderableMesh);
 
-				for (Map.Entry<String, Obj> entry : materialGroups.entrySet()) {
+				for (Map.Entry<String, RenderixMesh> entry : materialGroups.entrySet()) {
 					String materialName = entry.getKey();
-					Obj materialObj = entry.getValue();
+					RenderixMesh materialMesh = entry.getValue();
 
-					if (materialObj.getNumFaces() == 0) continue;
+					if (materialMesh.faceCount() == 0) continue;
 
 					ObjGroup group = new ObjGroup("default", materialName);
-					model.addDeindexedVertices(materialObj, group);
+					model.addDeindexedVertices(materialMesh, group);
 					model.groups.put(materialName, group);
 				}
 			}
@@ -104,7 +111,7 @@ public class ObjModel {
 		return model;
 	}
 
-	private void loadMaterials(Obj obj, ResourceLocation resourceLocation) {
+	private void loadMaterials(RenderixMesh mesh, ResourceLocation resourceLocation) {
 		String namespace = resourceLocation != null ? resourceLocation.getNamespace() : Electricity.MOD_ID;
 		String resourcePath = resourceLocation != null ? resourceLocation.getPath() : "";
 		String baseDirectory = "";
@@ -113,19 +120,19 @@ public class ObjModel {
 			baseDirectory = resourcePath.substring(0, slashIndex + 1);
 		}
 
-		for (String mtlFileName : obj.getMtlFileNames()) {
+		for (String mtlFileName : mesh.materialLibraries()) {
 			try {
 				String relativePath = baseDirectory.isEmpty() ? mtlFileName : baseDirectory + mtlFileName;
 				ResourceLocation mtlLocation = new ResourceLocation(namespace, relativePath);
 				InputStream stream = Minecraft.getInstance().getResourceManager().getResource(mtlLocation).orElseThrow().open();
 
-				List<Mtl> mtls = MtlReader.read(stream);
-				for (Mtl mtl : mtls) {
+				List<RenderixMaterial> mtls = RenderixMaterials.read(stream);
+				for (RenderixMaterial mtl : mtls) {
 					ResourceLocation texture = null;
-					if (mtl.getMapKd() != null && !mtl.getMapKd().isEmpty()) {
-						texture = new ResourceLocation("electricity", "textures/block/" + mtl.getMapKd());
+					if (mtl.diffuseMap() != null && !mtl.diffuseMap().isEmpty()) {
+						texture = new ResourceLocation("electricity", "textures/block/" + mtl.diffuseMap());
 					}
-					materials.put(mtl.getName(), new ObjMaterial(mtl.getName(), texture));
+					materials.put(mtl.name(), new ObjMaterial(mtl.name(), texture));
 				}
 
 				stream.close();
@@ -135,65 +142,70 @@ public class ObjModel {
 		}
 	}
 
-	private void addDeindexedVertices(Obj obj, ObjGroup group) {
-		for (int i = 0; i < obj.getNumFaces(); i++) {
-			ObjFace face = obj.getFace(i);
-			int numVertices = face.getNumVertices();
+	private void addDeindexedVertices(RenderixMesh mesh, ObjGroup group) {
+		for (int i = 0; i < mesh.faceCount(); i++) {
+			RenderixFace face = mesh.face(i);
+			int numVertices = face.vertexCount();
 			if (numVertices < 3) continue;
 
-			Vector3f fallbackNormal = face.containsNormalIndices() ? null : calculateFaceNormal(obj, face);
+			Vector3f fallbackNormal = face.hasNormals() ? null : calculateFaceNormal(mesh, face);
 
 			for (int j = 0; j < numVertices; j++) {
-				addDeindexedVertex(obj, face, j, group, fallbackNormal);
+				addDeindexedVertex(mesh, face, j, group, fallbackNormal);
 			}
 
 			if (numVertices == 3) {
-				addDeindexedVertex(obj, face, 2, group, fallbackNormal);
+				addDeindexedVertex(mesh, face, 2, group, fallbackNormal);
 			}
 		}
 	}
 
-	private void addDeindexedVertex(Obj obj, ObjFace face, int vertexIndexInFace, ObjGroup group, Vector3f fallbackNormal) {
-		int posIndex = face.getVertexIndex(vertexIndexInFace);
-		int normalIndex = face.containsNormalIndices() ? face.getNormalIndex(vertexIndexInFace) : -1;
-		int texCoordIndex = face.containsTexCoordIndices() ? face.getTexCoordIndex(vertexIndexInFace) : -1;
+	private void addDeindexedVertex(RenderixMesh mesh, RenderixFace face, int vertexIndexInFace, ObjGroup group, Vector3f fallbackNormal) {
+		int posIndex = face.positionIndex(vertexIndexInFace);
+		int normalIndex = face.hasNormals() ? face.normalIndex(vertexIndexInFace) : -1;
+		int texCoordIndex = face.hasTexCoords() ? face.texCoordIndex(vertexIndexInFace) : -1;
 
-		FloatTuple vertex = obj.getVertex(posIndex);
-		group.vertices.add(new Vector3f(vertex.getX(), vertex.getY(), vertex.getZ()));
+		float[] vertex = mesh.position(posIndex);
+		group.vertices.add(new Vector3f(getComponent(vertex, 0), getComponent(vertex, 1), getComponent(vertex, 2)));
 
 		if (normalIndex != -1) {
-			FloatTuple normal = obj.getNormal(normalIndex);
-			group.normals.add(new Vector3f(normal.getX(), normal.getY(), normal.getZ()));
+			float[] normal = mesh.normal(normalIndex);
+			group.normals.add(new Vector3f(getComponent(normal, 0), getComponent(normal, 1), getComponent(normal, 2)));
 		} else {
 			group.normals.add(fallbackNormal != null ? new Vector3f(fallbackNormal) : new Vector3f(0, 1, 0));
 		}
 
 		if (texCoordIndex != -1) {
-			FloatTuple texCoord = obj.getTexCoord(texCoordIndex);
-			group.texCoords.add(texCoord.getX());
-			group.texCoords.add(1.0f - texCoord.getY());
+			float[] texCoord = mesh.texCoord(texCoordIndex);
+			group.texCoords.add(getComponent(texCoord, 0));
+			group.texCoords.add(1.0f - getComponent(texCoord, 1));
 		} else {
 			group.texCoords.add(0.0f);
 			group.texCoords.add(0.0f);
 		}
 	}
 
-	private Vector3f calculateFaceNormal(Obj obj, ObjFace face) {
-		if (face.getNumVertices() < 3) return new Vector3f(0, 1, 0);
+	private Vector3f calculateFaceNormal(RenderixMesh mesh, RenderixFace face) {
+		if (face.vertexCount() < 3) return new Vector3f(0, 1, 0);
 
-		FloatTuple v0 = obj.getVertex(face.getVertexIndex(0));
-		FloatTuple v1 = obj.getVertex(face.getVertexIndex(1));
-		FloatTuple v2 = obj.getVertex(face.getVertexIndex(2));
+		float[] v0 = mesh.position(face.positionIndex(0));
+		float[] v1 = mesh.position(face.positionIndex(1));
+		float[] v2 = mesh.position(face.positionIndex(2));
 
-		Vector3f edge1 = new Vector3f(v1.getX() - v0.getX(), v1.getY() - v0.getY(), v1.getZ() - v0.getZ());
+		Vector3f edge1 = new Vector3f(getComponent(v1, 0) - getComponent(v0, 0), getComponent(v1, 1) - getComponent(v0, 1), getComponent(v1, 2) - getComponent(v0, 2));
 
-		Vector3f edge2 = new Vector3f(v2.getX() - v0.getX(), v2.getY() - v0.getY(), v2.getZ() - v0.getZ());
+		Vector3f edge2 = new Vector3f(getComponent(v2, 0) - getComponent(v0, 0), getComponent(v2, 1) - getComponent(v0, 1), getComponent(v2, 2) - getComponent(v0, 2));
 
 		Vector3f normal = new Vector3f();
 		edge1.cross(edge2, normal);
 		normal.normalize();
 
 		return normal;
+	}
+
+	private float getComponent(float[] values, int index) {
+		if (values == null) return 0.0f;
+		return index < values.length ? values[index] : 0.0f;
 	}
 
 	public static class BoundingBox {

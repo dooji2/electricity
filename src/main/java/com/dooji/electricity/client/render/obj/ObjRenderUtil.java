@@ -15,6 +15,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
+// OBJ pipeline code will be migrated to Renderix
 @OnlyIn(Dist.CLIENT)
 public final class ObjRenderUtil {
 	private ObjRenderUtil() {

@@ -5,6 +5,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
+// OBJ pipeline code will be migrated to Renderix
 @OnlyIn(Dist.CLIENT)
 public final class ObjTransforms {
 	private ObjTransforms() {

@@ -17,6 +17,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import org.joml.Matrix4f;
 
+// OBJ pipeline code will be migrated to Renderix
 public abstract class ObjRendererBase {
 	protected static void renderGrouped(ObjModel model, PoseStack poseStack, Matrix4f projectionMatrix, ResourceLocation texture, int packedLight, BlockPos pos, Map<BlockPos, Map<String, GroupBuffer>> cache) {
 		Map<ResourceLocation, List<GroupBuffer>> byTexture = new HashMap<>();

@@ -8,6 +8,8 @@ import com.dooji.electricity.block.UtilityPoleBlock;
 import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
 import com.dooji.electricity.client.render.obj.ObjTransforms.Transform;
+
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -24,6 +26,7 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import org.joml.Vector3f;
 
+// OBJ pipeline code will be migrated to Renderix
 @OnlyIn(Dist.CLIENT)
 public class ObjRaycaster {
 	public static boolean isHoveringPart(Vec3 rayOrigin, Vec3 rayDirection, BlockPos blockPos, String partName) {
@@ -241,9 +244,13 @@ public class ObjRaycaster {
 					blockEntity.getBlockState().getBlock().getName(),
 					Component.translatable("tooltip.electricity.power.amount", formatPower(pole.getCurrentPower())));
 		} else if (blockEntity instanceof PowerBoxBlockEntity powerBox) {
-			return List.of(
-					blockEntity.getBlockState().getBlock().getName(),
-					Component.translatable("tooltip.electricity.power.amount", formatPower(powerBox.getCurrentPower())));
+			List<Component> lines = new ArrayList<>();
+			lines.add(blockEntity.getBlockState().getBlock().getName());
+			lines.add(Component.translatable("tooltip.electricity.power.amount", formatPower(powerBox.getCurrentPower())));
+			int feStored = powerBox.getForgeEnergyStored();
+			int feRate = powerBox.getForgeTransferRate();
+			lines.add(Component.translatable("tooltip.electricity.power.fe", feStored, feRate));
+			return lines;
 		}
 
 		return null;
