@@ -7,6 +7,6 @@ As of now the mod is still under active development as it is not finished. There
 There's a global weather model that aims to behave like a real weather system. Wind fields move across the world and drive the wind turbines; they speed up and turn their head to follow the current wind direction.
 Weather can cause events on the grid, for e.g. power boxes can trip, and wind turbines stop if the wind speeds are too high.
 
-For now, you can use it with Electric Lamps. The Electric Lamp has multiple states, wear, and can reacts to how good or bad the power is. The Electricity API is available to developers, and this block is basically a showcase of what's possible.
+Electricity has Forge Energy support, and a few addons to use its proprietary electricity pipeline are on the way. For now, you can use it with Electric Lamps. The Electric Lamp has multiple states, wear, and can reacts to how good or bad the power is. The Electricity API is available to developers, and this block is basically a showcase of what's possible.
 
-No survival recipes for now. For usage and other important information, please see [the wiki on GitHub](https://github.com/dooji2/electricity/wiki).
+For usage and other important information such as recipes, please see [the wiki on GitHub](https://github.com/dooji2/electricity/wiki).
