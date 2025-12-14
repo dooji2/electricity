@@ -2,8 +2,6 @@
 
 ![A wind turbine](https://cdn.modrinth.com/data/cached_images/e65d30e6fd4cc299b21ad6ee80608da2a5fb916a.gif)
 
-As of now the mod is still under active development as it is not finished. There will be support for many other Minecraft versions and/or modloaders in the future!
-
 There's a global weather model that aims to behave like a real weather system. Wind fields move across the world and drive the wind turbines; they speed up and turn their head to follow the current wind direction.
 Weather can cause events on the grid, for e.g. power boxes can trip, and wind turbines stop if the wind speeds are too high.
 
