@@ -11,6 +11,8 @@ import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.render.obj.ObjRenderUtil;
 import com.dooji.electricity.client.render.obj.ObjRendererBase;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.mojang.blaze3d.vertex.PoseStack;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -53,38 +55,30 @@ public class UtilityPoleRenderer extends ObjRendererBase {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj");
-		ObjBlockRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), modelLocation, null);
+		ObjBlockDefinition definition = ObjDefinitions.get(Electricity.UTILITY_POLE_BLOCK.get());
+		if (definition == null) return;
+		ObjBlockRegistry.register(definition.block(), definition.model(), null);
+		for (String insulator : definition.insulators()) {
+			ObjInteractionRegistry.register(definition.block(), insulator, null);
+		}
 
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_1_Material.023", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_2_Material.009", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_3_Material.016", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_4_Material.001", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_5_Material.051", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_6_Material.037", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_7_Material.030", null);
-		ObjInteractionRegistry.register(Electricity.UTILITY_POLE_BLOCK.get(), "insulator_8_Material.058", null);
-
-		calculateAndRegisterBoundingBoxes();
+		calculateAndRegisterBoundingBoxes(definition);
 	}
 
-	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/utility_pole/utility_pole.obj"));
+	private static void calculateAndRegisterBoundingBoxes(ObjBlockDefinition definition) {
+		var model = ObjLoader.getModel(definition.model());
 		if (model == null) return;
 
 		Map<String, ObjModel.BoundingBox> insulatorBoxes = new HashMap<>();
 
-		String[] insulatorGroups = {"insulator_1_Material.023", "insulator_2_Material.009", "insulator_3_Material.016", "insulator_4_Material.001", "insulator_5_Material.051",
-				"insulator_6_Material.037", "insulator_7_Material.030", "insulator_8_Material.058"};
-
-		for (String groupName : insulatorGroups) {
+		for (String groupName : definition.insulators()) {
 			ObjModel.BoundingBox bbox = model.getBoundingBox(groupName);
 			if (bbox != null) {
 				insulatorBoxes.put(groupName, bbox);
 			}
 		}
 
-		ObjBoundingBoxRegistry.registerBoundingBoxes(Electricity.UTILITY_POLE_BLOCK.get(), insulatorBoxes);
+		ObjBoundingBoxRegistry.registerBoundingBoxes(definition.block(), insulatorBoxes);
 	}
 
 	private static float rotationForPole(Direction facing) {

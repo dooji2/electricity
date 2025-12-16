@@ -6,7 +6,10 @@ import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
+import java.util.List;
 import javax.annotation.Nonnull;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -26,8 +29,8 @@ import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
 public class UtilityPoleBlockEntity extends BlockEntity {
-	private Vec3[] wirePositions = new Vec3[8];
-	private int[] insulatorIds = new int[8];
+	private Vec3[] wirePositions;
+	private int[] insulatorIds;
 	private float offsetX = 0.0f;
 	private float offsetY = 0.0f;
 	private float offsetZ = 0.0f;
@@ -38,6 +41,7 @@ public class UtilityPoleBlockEntity extends BlockEntity {
 
 	public UtilityPoleBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
+		ensureArraySizes();
 		initializeWirePositions();
 		generateInsulatorIds();
 	}
@@ -48,32 +52,49 @@ public class UtilityPoleBlockEntity extends BlockEntity {
 		return null;
 	}
 
+	private ObjBlockDefinition definition() {
+		return ObjDefinitions.get(getBlockState().getBlock());
+	}
+
+	private List<String> insulatorGroups() {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && !definition.insulators().isEmpty()) return definition.insulators();
+		return List.of();
+	}
+
+	private int insulatorCount() {
+		return insulatorGroups().size();
+	}
+
+	private void ensureArraySizes() {
+		int count = insulatorCount();
+		if (wirePositions == null || wirePositions.length != count) {
+			Vec3[] copy = new Vec3[count];
+			if (wirePositions != null) {
+				System.arraycopy(wirePositions, 0, copy, 0, Math.min(wirePositions.length, count));
+			}
+			wirePositions = copy;
+		}
+
+		if (insulatorIds == null || insulatorIds.length != count) {
+			int[] ids = new int[count];
+			if (insulatorIds != null) {
+				System.arraycopy(insulatorIds, 0, ids, 0, Math.min(insulatorIds.length, count));
+			}
+			insulatorIds = ids;
+		}
+	}
+
 	private void initializeWirePositions() {
-		Vec3 center = Vec3.atCenterOf(getBlockPos());
-
-		String[] insulatorGroups = {"insulator_1_Material.023", "insulator_2_Material.009", "insulator_3_Material.016", "insulator_4_Material.001", "insulator_5_Material.051",
-				"insulator_6_Material.037", "insulator_7_Material.030", "insulator_8_Material.058"};
-
-		boolean useDynamicPositions = false;
-		for (int i = 0; i < insulatorGroups.length && i < wirePositions.length; i++) {
-			Vec3 orientedCenter = calculateOrientedInsulatorCenter(insulatorGroups[i]);
+		ensureArraySizes();
+		List<String> groups = insulatorGroups();
+		for (int i = 0; i < groups.size() && i < wirePositions.length; i++) {
+			Vec3 orientedCenter = calculateOrientedInsulatorCenter(groups.get(i));
 			if (orientedCenter != null) {
 				wirePositions[i] = orientedCenter;
-				useDynamicPositions = true;
 			} else {
 				break;
 			}
-		}
-
-		if (!useDynamicPositions) {
-			wirePositions[0] = center.add(0.2, 5.5, 0.2);
-			wirePositions[1] = center.add(-0.2, 5.5, 0.2);
-			wirePositions[2] = center.add(0.2, 5.5, -0.2);
-			wirePositions[3] = center.add(-0.2, 5.5, -0.2);
-			wirePositions[4] = center.add(0.2, 4.5, 0.2);
-			wirePositions[5] = center.add(-0.2, 4.5, 0.2);
-			wirePositions[6] = center.add(0.2, 4.5, -0.2);
-			wirePositions[7] = center.add(-0.2, 4.5, -0.2);
 		}
 	}
 
@@ -265,6 +286,7 @@ public class UtilityPoleBlockEntity extends BlockEntity {
 	@Override
 	public void load(@Nonnull CompoundTag tag) {
 		super.load(tag);
+		ensureArraySizes();
 
 		offsetX = tag.getFloat("offsetX");
 		offsetY = tag.getFloat("offsetY");
@@ -308,6 +330,7 @@ public class UtilityPoleBlockEntity extends BlockEntity {
 	@Override
 	public void handleUpdateTag(CompoundTag tag) {
 		super.handleUpdateTag(tag);
+		ensureArraySizes();
 		offsetX = tag.getFloat("offsetX");
 		offsetY = tag.getFloat("offsetY");
 		offsetZ = tag.getFloat("offsetZ");
@@ -341,6 +364,7 @@ public class UtilityPoleBlockEntity extends BlockEntity {
 	}
 
 	private void generateInsulatorIds() {
+		ensureArraySizes();
 		for (int i = 0; i < insulatorIds.length; i++) {
 			if (insulatorIds[i] == 0) {
 				insulatorIds[i] = InsulatorIdRegistry.claimId();

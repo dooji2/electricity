@@ -11,6 +11,8 @@ import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.render.obj.ObjRenderUtil;
 import com.dooji.electricity.client.render.obj.ObjRendererBase;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.mojang.blaze3d.vertex.PoseStack;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -56,16 +58,18 @@ public class PowerBoxRenderer extends ObjRendererBase {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/power_box/power_box.obj");
-		ObjBlockRegistry.register(Electricity.POWER_BOX_BLOCK.get(), modelLocation, null);
+		ObjBlockDefinition definition = ObjDefinitions.get(Electricity.POWER_BOX_BLOCK.get());
+		if (definition == null) return;
+		ObjBlockRegistry.register(definition.block(), definition.model(), null);
+		for (String insulator : definition.insulators()) {
+			ObjInteractionRegistry.register(definition.block(), insulator, null);
+		}
 
-		ObjInteractionRegistry.register(Electricity.POWER_BOX_BLOCK.get(), "insulator_Material", null);
-
-		calculateAndRegisterBoundingBoxes();
+		calculateAndRegisterBoundingBoxes(definition);
 	}
 
-	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/power_box/power_box.obj"));
+	private static void calculateAndRegisterBoundingBoxes(ObjBlockDefinition definition) {
+		var model = ObjLoader.getModel(definition.model());
 		if (model == null) {
 			LOGGER.error("Failed to load Power Box model");
 			return;
@@ -73,9 +77,7 @@ public class PowerBoxRenderer extends ObjRendererBase {
 
 		Map<String, ObjModel.BoundingBox> insulatorBoxes = new HashMap<>();
 
-		String[] insulatorGroups = {"insulator_Material"};
-
-		for (String groupName : insulatorGroups) {
+		for (String groupName : definition.insulators()) {
 			ObjModel.BoundingBox bbox = model.getBoundingBox(groupName);
 			if (bbox != null) {
 				insulatorBoxes.put(groupName, bbox);
@@ -84,7 +86,7 @@ public class PowerBoxRenderer extends ObjRendererBase {
 			}
 		}
 
-		ObjBoundingBoxRegistry.registerBoundingBoxes(Electricity.POWER_BOX_BLOCK.get(), insulatorBoxes);
+		ObjBoundingBoxRegistry.registerBoundingBoxes(definition.block(), insulatorBoxes);
 	}
 
 	private static float rotationForPowerBox(Direction facing) {

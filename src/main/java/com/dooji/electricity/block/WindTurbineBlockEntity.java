@@ -5,6 +5,8 @@ import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.main.weather.GlobalWeatherManager;
 import com.dooji.electricity.main.weather.WeatherSnapshot;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
@@ -29,8 +31,8 @@ import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
 public class WindTurbineBlockEntity extends BlockEntity {
-	private Vec3[] wirePositions = new Vec3[1];
-	private int[] insulatorIds = new int[1];
+	private Vec3[] wirePositions;
+	private int[] insulatorIds;
 
 	private float rotationSpeed1 = 0.0f;
 	private float rotationSpeed2 = 0.0f;
@@ -39,8 +41,6 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 	private double generatedPower = 0.0;
 	private double currentPower = 0.0;
-	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 9.5, -0.5);
-
 	private float lastEffectiveWindSpeed = 0.0f;
 	private float lastAlignedWindSpeed = 0.0f;
 	private float windDirection = 0.0f;
@@ -59,6 +59,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
+		ensureArraySizes();
 		initializeWirePositions();
 		generateInsulatorIds();
 	}
@@ -67,13 +68,51 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		return Electricity.WIND_TURBINE_BLOCK_ENTITY.get();
 	}
 
+	private ObjBlockDefinition definition() {
+		return ObjDefinitions.get(getBlockState().getBlock());
+	}
+
+	private int insulatorCount() {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && !definition.insulators().isEmpty()) return definition.insulators().size();
+		return 0;
+	}
+
+	private String insulatorName(int index) {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && index < definition.insulators().size()) return definition.insulators().get(index);
+		return null;
+	}
+
+	private void ensureArraySizes() {
+		int count = insulatorCount();
+		if (count <= 0) count = 0;
+		if (wirePositions == null || wirePositions.length != count) {
+			Vec3[] copy = new Vec3[count];
+			if (wirePositions != null) {
+				System.arraycopy(wirePositions, 0, copy, 0, Math.min(wirePositions.length, count));
+			}
+			wirePositions = copy;
+		}
+
+		if (insulatorIds == null || insulatorIds.length != count) {
+			int[] ids = new int[count];
+			if (insulatorIds != null) {
+				System.arraycopy(insulatorIds, 0, ids, 0, Math.min(insulatorIds.length, count));
+			}
+			insulatorIds = ids;
+		}
+	}
+
 	private void initializeWirePositions() {
+		ensureArraySizes();
 		for (int i = 0; i < wirePositions.length; i++) {
 			wirePositions[i] = calculateOrientedInsulatorCenter(i);
 		}
 	}
 
 	private void generateInsulatorIds() {
+		ensureArraySizes();
 		for (int i = 0; i < insulatorIds.length; i++) {
 			insulatorIds[i] = InsulatorIdRegistry.claimId();
 		}
@@ -152,16 +191,17 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
-		if (index != 0) return null;
+		if (index < 0 || index >= wirePositions.length) return null;
 
-		String groupName = "insulator_Plastic";
-		var boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.WIND_TURBINE_BLOCK.get(), groupName);
+		String groupName = insulatorName(index);
+		if (groupName == null) return null;
+		var boundingBox = ObjBoundingBoxRegistry.getBoundingBox(getBlockState().getBlock(), groupName);
 		Vec3 localCenter;
 		if (boundingBox != null) {
 			Vector3f center = boundingBox.center;
 			localCenter = new Vec3(center.x(), center.y(), center.z());
 		} else {
-			localCenter = DEFAULT_INSULATOR_OFFSET;
+			return null;
 		}
 
 		Direction facing = getBlockState().getValue(WindTurbineBlock.FACING);
@@ -229,6 +269,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	@Override
 	public void load(@Nonnull CompoundTag tag) {
 		super.load(tag);
+		ensureArraySizes();
 
 		if (tag.contains("wirePositions")) {
 			ListTag positionsList = tag.getList("wirePositions", 10);
@@ -263,6 +304,7 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	}
 
 	private void updateWirePositions() {
+		ensureArraySizes();
 		for (int i = 0; i < wirePositions.length; i++) {
 			Vec3 calculatedPos = calculateOrientedInsulatorCenter(i);
 			if (calculatedPos != null) {

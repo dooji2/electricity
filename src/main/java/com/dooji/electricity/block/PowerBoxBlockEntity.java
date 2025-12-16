@@ -10,6 +10,8 @@ import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
 import com.dooji.electricity.main.Electricity;
 import com.dooji.electricity.main.ElectricityServerConfig;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
 import com.dooji.electricity.power.PowerFieldManager;
 import java.util.ArrayList;
@@ -45,13 +47,12 @@ import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
 public class PowerBoxBlockEntity extends BlockEntity {
-	private Vec3[] wirePositions = new Vec3[1];
-	private int[] insulatorIds = new int[1];
+	private Vec3[] wirePositions;
+	private int[] insulatorIds;
 
 	private double currentPower = 0.0;
 	private static final double POWER_THRESHOLD = 0.1;
 	private static final String[] POWER_PROPERTY_NAMES = {"powered", "lit"};
-	private static final Vec3 DEFAULT_INSULATOR_OFFSET = new Vec3(0.0, 0.75, -0.25);
 	private PowerDeliveryEvent incomingEvent = PowerDeliveryEvent.none();
 	private boolean breakerTripped = false;
 	private int breakerCooldown = 0;
@@ -66,6 +67,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 
 	public PowerBoxBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
+		ensureArraySizes();
 		generateInsulatorIds();
 		updateWirePositions();
 	}
@@ -76,7 +78,44 @@ public class PowerBoxBlockEntity extends BlockEntity {
 		return null;
 	}
 
+	private ObjBlockDefinition definition() {
+		return ObjDefinitions.get(getBlockState().getBlock());
+	}
+
+	private int insulatorCount() {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && !definition.insulators().isEmpty()) return definition.insulators().size();
+		return 0;
+	}
+
+	private String insulatorName(int index) {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && index < definition.insulators().size()) return definition.insulators().get(index);
+		return null;
+	}
+
+	private void ensureArraySizes() {
+		int count = insulatorCount();
+		if (count <= 0) count = 0;
+		if (wirePositions == null || wirePositions.length != count) {
+			Vec3[] copy = new Vec3[count];
+			if (wirePositions != null) {
+				System.arraycopy(wirePositions, 0, copy, 0, Math.min(wirePositions.length, count));
+			}
+			wirePositions = copy;
+		}
+
+		if (insulatorIds == null || insulatorIds.length != count) {
+			int[] ids = new int[count];
+			if (insulatorIds != null) {
+				System.arraycopy(insulatorIds, 0, ids, 0, Math.min(insulatorIds.length, count));
+			}
+			insulatorIds = ids;
+		}
+	}
+
 	private void generateInsulatorIds() {
+		ensureArraySizes();
 		for (int i = 0; i < insulatorIds.length; i++) {
 			if (insulatorIds[i] == 0) {
 				insulatorIds[i] = InsulatorIdRegistry.claimId();
@@ -132,19 +171,18 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
-		if (index < 0 || index >= 1) return null;
+		if (index < 0 || index >= wirePositions.length) return null;
 
-		String[] insulatorGroups = {"insulator_Material"};
-
-		String groupName = insulatorGroups[index];
-		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.POWER_BOX_BLOCK.get(), groupName);
+		String groupName = insulatorName(index);
+		if (groupName == null) return null;
+		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(getBlockState().getBlock(), groupName);
 
 		Vec3 localCenter;
 		if (boundingBox != null) {
 			Vector3f center = boundingBox.center;
 			localCenter = new Vec3(center.x, center.y, center.z);
 		} else {
-			localCenter = DEFAULT_INSULATOR_OFFSET;
+			return null;
 		}
 
 		Direction facing = getBlockState().getValue(PowerBoxBlock.FACING);
@@ -202,6 +240,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	}
 
 	private void updateWirePositions() {
+		ensureArraySizes();
 		for (int i = 0; i < wirePositions.length; i++) {
 			Vec3 calculatedPos = calculateOrientedInsulatorCenter(i);
 			if (calculatedPos != null) {
@@ -392,6 +431,7 @@ public class PowerBoxBlockEntity extends BlockEntity {
 	@Override
 	public void load(@Nonnull CompoundTag tag) {
 		super.load(tag);
+		ensureArraySizes();
 
 		if (tag.contains("wirePositions", Tag.TAG_LIST)) {
 			ListTag wirePositionsList = tag.getList("wirePositions", Tag.TAG_COMPOUND);

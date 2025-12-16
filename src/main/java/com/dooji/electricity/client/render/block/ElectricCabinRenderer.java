@@ -11,6 +11,8 @@ import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.render.obj.ObjRenderUtil;
 import com.dooji.electricity.client.render.obj.ObjRendererBase;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.mojang.blaze3d.vertex.PoseStack;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -56,17 +58,18 @@ public class ElectricCabinRenderer extends ObjRendererBase {
 	}
 
 	public static void init() {
-		ResourceLocation modelLocation = new ResourceLocation(Electricity.MOD_ID, "models/electric_cab/cab.obj");
-		ObjBlockRegistry.register(Electricity.ELECTRIC_CABIN_BLOCK.get(), modelLocation, null);
+		ObjBlockDefinition definition = ObjDefinitions.get(Electricity.ELECTRIC_CABIN_BLOCK.get());
+		if (definition == null) return;
+		ObjBlockRegistry.register(definition.block(), definition.model(), null);
+		for (String insulator : definition.insulators()) {
+			ObjInteractionRegistry.register(definition.block(), insulator, null);
+		}
 
-		ObjInteractionRegistry.register(Electricity.ELECTRIC_CABIN_BLOCK.get(), "insulator_input_Material.065", null);
-		ObjInteractionRegistry.register(Electricity.ELECTRIC_CABIN_BLOCK.get(), "insulatoroutput_Material.044", null);
-
-		calculateAndRegisterBoundingBoxes();
+		calculateAndRegisterBoundingBoxes(definition);
 	}
 
-	private static void calculateAndRegisterBoundingBoxes() {
-		var model = ObjLoader.getModel(new ResourceLocation(Electricity.MOD_ID, "models/electric_cab/cab.obj"));
+	private static void calculateAndRegisterBoundingBoxes(ObjBlockDefinition definition) {
+		var model = ObjLoader.getModel(definition.model());
 		if (model == null) {
 			LOGGER.error("Failed to load Electric Cabin model");
 			return;
@@ -74,9 +77,7 @@ public class ElectricCabinRenderer extends ObjRendererBase {
 
 		Map<String, ObjModel.BoundingBox> insulatorBoxes = new HashMap<>();
 
-		String[] insulatorGroups = {"insulator_input_Material.065", "insulatoroutput_Material.044"};
-
-		for (String groupName : insulatorGroups) {
+		for (String groupName : definition.insulators()) {
 			ObjModel.BoundingBox bbox = model.getBoundingBox(groupName);
 			if (bbox != null) {
 				insulatorBoxes.put(groupName, bbox);
@@ -85,7 +86,7 @@ public class ElectricCabinRenderer extends ObjRendererBase {
 			}
 		}
 
-		ObjBoundingBoxRegistry.registerBoundingBoxes(Electricity.ELECTRIC_CABIN_BLOCK.get(), insulatorBoxes);
+		ObjBoundingBoxRegistry.registerBoundingBoxes(definition.block(), insulatorBoxes);
 	}
 
 	private static float rotationForCabin(Direction facing) {

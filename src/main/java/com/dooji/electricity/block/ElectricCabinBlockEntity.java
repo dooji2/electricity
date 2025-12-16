@@ -6,6 +6,8 @@ import com.dooji.electricity.client.render.obj.ObjModel;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.registry.ObjBlockDefinition;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
 import javax.annotation.Nonnull;
 import net.minecraft.core.BlockPos;
@@ -26,15 +28,14 @@ import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
 public class ElectricCabinBlockEntity extends BlockEntity {
-	private static final String[] INSULATOR_PARTS = {"insulator_input_Material.065", "insulatoroutput_Material.044"};
-	private static final Vec3[] DEFAULT_INSULATOR_OFFSETS = {new Vec3(0.0, 0.9, -0.35), new Vec3(0.0, 0.9, 0.35)};
-	private Vec3[] wirePositions = new Vec3[2];
-	private int[] insulatorIds = new int[2];
+	private Vec3[] wirePositions;
+	private int[] insulatorIds;
 
 	private double currentPower = 0.0;
 
 	public ElectricCabinBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
+		ensureArraySizes();
 		generateInsulatorIds();
 		updateWirePositions();
 	}
@@ -45,7 +46,44 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 		return null;
 	}
 
+	private ObjBlockDefinition definition() {
+		return ObjDefinitions.get(getBlockState().getBlock());
+	}
+
+	private int insulatorCount() {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && !definition.insulators().isEmpty()) return definition.insulators().size();
+		return 0;
+	}
+
+	private String insulatorName(int index) {
+		ObjBlockDefinition definition = definition();
+		if (definition != null && index < definition.insulators().size()) return definition.insulators().get(index);
+		return null;
+	}
+
+	private void ensureArraySizes() {
+		int count = insulatorCount();
+		if (count <= 0) count = 0;
+		if (wirePositions == null || wirePositions.length != count) {
+			Vec3[] copy = new Vec3[count];
+			if (wirePositions != null) {
+				System.arraycopy(wirePositions, 0, copy, 0, Math.min(wirePositions.length, count));
+			}
+			wirePositions = copy;
+		}
+
+		if (insulatorIds == null || insulatorIds.length != count) {
+			int[] ids = new int[count];
+			if (insulatorIds != null) {
+				System.arraycopy(insulatorIds, 0, ids, 0, Math.min(insulatorIds.length, count));
+			}
+			insulatorIds = ids;
+		}
+	}
+
 	private void generateInsulatorIds() {
+		ensureArraySizes();
 		for (int i = 0; i < insulatorIds.length; i++) {
 			if (insulatorIds[i] == 0) {
 				insulatorIds[i] = InsulatorIdRegistry.claimId();
@@ -89,17 +127,16 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
-		if (index < 0 || index >= 2) return null;
+		if (index < 0 || index >= wirePositions.length) return null;
 
-		String groupName = INSULATOR_PARTS[index];
-		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(Electricity.ELECTRIC_CABIN_BLOCK.get(), groupName);
+		String groupName = insulatorName(index);
+		if (groupName == null) return null;
+		ObjModel.BoundingBox boundingBox = ObjBoundingBoxRegistry.getBoundingBox(getBlockState().getBlock(), groupName);
 
 		Vec3 localCenter;
 		if (boundingBox != null) {
 			Vector3f center = boundingBox.center;
 			localCenter = new Vec3(center.x, center.y, center.z);
-		} else if (index < DEFAULT_INSULATOR_OFFSETS.length) {
-			localCenter = DEFAULT_INSULATOR_OFFSETS[index];
 		} else {
 			return null;
 		}
@@ -138,6 +175,7 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 	}
 
 	private void updateWirePositions() {
+		ensureArraySizes();
 		for (int i = 0; i < wirePositions.length; i++) {
 			Vec3 calculatedPos = calculateOrientedInsulatorCenter(i);
 			if (calculatedPos != null) {
@@ -149,6 +187,7 @@ public class ElectricCabinBlockEntity extends BlockEntity {
 	@Override
 	public void load(@Nonnull CompoundTag tag) {
 		super.load(tag);
+		ensureArraySizes();
 
 		if (tag.contains("wirePositions", Tag.TAG_LIST)) {
 			ListTag wirePositionsList = tag.getList("wirePositions", Tag.TAG_COMPOUND);
