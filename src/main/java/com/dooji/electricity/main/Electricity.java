@@ -11,23 +11,32 @@ import com.dooji.electricity.block.UtilityPoleBlock;
 import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.block.WindTurbineBlock;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
+import com.dooji.electricity.block.WorkbenchBlock;
 import com.dooji.electricity.item.ItemWire;
 import com.dooji.electricity.item.PowerWrenchItem;
+import com.dooji.electricity.menu.WorkbenchMenu;
+import com.dooji.electricity.recipe.WorkbenchRecipe;
+import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.main.network.ElectricityNetworking;
 import com.dooji.electricity.main.power.PowerNetwork;
 import com.dooji.electricity.main.wire.WireManager;
 import com.dooji.electricity.main.weather.GlobalWeatherManager;
+
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.RecipeSerializer;
+import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.common.extensions.IForgeMenuType;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.server.ServerStartedEvent;
@@ -55,16 +64,16 @@ public class Electricity {
 	public static final DeferredRegister<CreativeModeTab> CREATIVE_TABS = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MOD_ID);
 	public static final DeferredRegister<Block> BLOCKS = DeferredRegister.create(ForgeRegistries.BLOCKS, MOD_ID);
 	public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITY_TYPES = DeferredRegister.create(ForgeRegistries.BLOCK_ENTITY_TYPES, MOD_ID);
+	public static final DeferredRegister<MenuType<?>> MENUS = DeferredRegister.create(ForgeRegistries.MENU_TYPES, MOD_ID);
+	public static final DeferredRegister<RecipeSerializer<?>> RECIPE_SERIALIZERS = DeferredRegister.create(ForgeRegistries.RECIPE_SERIALIZERS, MOD_ID);
+	public static final DeferredRegister<RecipeType<?>> RECIPE_TYPES = DeferredRegister.create(ForgeRegistries.RECIPE_TYPES, MOD_ID);
 
 	public static final RegistryObject<Block> UTILITY_POLE_BLOCK = BLOCKS.register("utility_pole", () -> new UtilityPoleBlock(Block.Properties.of().strength(2.0f, 10.0f).noOcclusion()));
-
 	public static final RegistryObject<Block> ELECTRIC_CABIN_BLOCK = BLOCKS.register("electric_cabin", () -> new ElectricCabinBlock(Block.Properties.of().strength(2.0f, 10.0f).noOcclusion()));
-
 	public static final RegistryObject<Block> POWER_BOX_BLOCK = BLOCKS.register("power_box", () -> new PowerBoxBlock(Block.Properties.of().strength(2.0f, 10.0f).noOcclusion()));
-
 	public static final RegistryObject<Block> WIND_TURBINE_BLOCK = BLOCKS.register("wind_turbine", () -> new WindTurbineBlock(Block.Properties.of().strength(2.0f, 10.0f).noOcclusion()));
-
 	public static final RegistryObject<Block> ELECTRIC_LAMP_BLOCK = BLOCKS.register("electric_lamp", () -> new ElectricLampBlock(Block.Properties.of().strength(0.3f).noOcclusion()));
+	public static final RegistryObject<Block> WORKBENCH_BLOCK = BLOCKS.register("workbench", () -> new WorkbenchBlock(Block.Properties.of().strength(2.0f).noOcclusion()));
 
 	public static final RegistryObject<Item> WIRE_ITEM = ITEMS.register("wire", ItemWire::new);
 	public static final RegistryObject<Item> POWER_WRENCH_ITEM = ITEMS.register("power_wrench", PowerWrenchItem::new);
@@ -74,6 +83,17 @@ public class Electricity {
 	public static final RegistryObject<Item> WIND_TURBINE_ITEM = ITEMS.register("wind_turbine", () -> new BlockItem(WIND_TURBINE_BLOCK.get(), new Item.Properties()));
 	public static final RegistryObject<Item> ELECTRIC_LAMP_ITEM = ITEMS.register("electric_lamp", () -> new BlockItem(ELECTRIC_LAMP_BLOCK.get(), new Item.Properties()));
 	public static final RegistryObject<Item> WEATHER_TABLET_ITEM = ITEMS.register("weather_tablet", () -> new Item(new Item.Properties().stacksTo(1)));
+	public static final RegistryObject<Item> WORKBENCH_ITEM = ITEMS.register("workbench", () -> new BlockItem(WORKBENCH_BLOCK.get(), new Item.Properties()));
+	public static final RegistryObject<Item> CIRCUIT_BOARD_ITEM = ITEMS.register("circuit_board", () -> new Item(new Item.Properties()));
+	public static final RegistryObject<Item> CPU_ITEM = ITEMS.register("cpu", () -> new Item(new Item.Properties()));
+	public static final RegistryObject<Item> SCREEN_ITEM = ITEMS.register("screen", () -> new Item(new Item.Properties()));
+	public static final RegistryObject<Item> INSULATOR_ITEM = ITEMS.register("insulator", () -> new Item(new Item.Properties()));
+	public static final RegistryObject<Item> METAL_CASING_ITEM = ITEMS.register("metal_casing", () -> new Item(new Item.Properties()));
+	public static final RegistryObject<Item> MOTOR_CORE_ITEM = ITEMS.register("motor_core", () -> new Item(new Item.Properties()));
+
+	public static final RegistryObject<MenuType<WorkbenchMenu>> WORKBENCH_MENU = MENUS.register("workbench", () -> IForgeMenuType.create(WorkbenchMenu::new));
+	public static final RegistryObject<RecipeSerializer<WorkbenchRecipe>> WORKBENCH_RECIPE_SERIALIZER = RECIPE_SERIALIZERS.register("workbench", WorkbenchRecipe.Serializer::new);
+	public static final RegistryObject<RecipeType<WorkbenchRecipe>> WORKBENCH_RECIPE_TYPE = RECIPE_TYPES.register("workbench", () -> WorkbenchRecipe.TYPE);
 
 	public static final RegistryObject<CreativeModeTab> ELECTRICITY_TAB = CREATIVE_TABS.register("main",
 			() -> CreativeModeTab.builder().title(Component.translatable("itemGroup." + MOD_ID + ".main")).icon(() -> new ItemStack(WIRE_ITEM.get())).displayItems((parameters, output) -> {
@@ -84,7 +104,13 @@ public class Electricity {
 				output.accept(POWER_BOX_ITEM.get());
 				output.accept(WIND_TURBINE_ITEM.get());
 				output.accept(ELECTRIC_LAMP_ITEM.get());
-				output.accept(WEATHER_TABLET_ITEM.get());
+				output.accept(WORKBENCH_ITEM.get());
+				output.accept(CIRCUIT_BOARD_ITEM.get());
+				output.accept(CPU_ITEM.get());
+				output.accept(SCREEN_ITEM.get());
+				output.accept(INSULATOR_ITEM.get());
+				output.accept(METAL_CASING_ITEM.get());
+				output.accept(MOTOR_CORE_ITEM.get());
 			}).build());
 
 	public static RegistryObject<BlockEntityType<UtilityPoleBlockEntity>> UTILITY_POLE_BLOCK_ENTITY;
@@ -101,6 +127,8 @@ public class Electricity {
 		BLOCKS.register(modEventBus);
 		ITEMS.register(modEventBus);
 		CREATIVE_TABS.register(modEventBus);
+		MENUS.register(modEventBus);
+		RECIPE_SERIALIZERS.register(modEventBus);
 		ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, ElectricityServerConfig.spec(), "Electricity/server.toml");
 
 		UTILITY_POLE_BLOCK_ENTITY = BLOCK_ENTITY_TYPES.register("utility_pole", () -> BlockEntityType.Builder.of(UtilityPoleBlockEntity::new, UTILITY_POLE_BLOCK.get()).build(null));
@@ -122,7 +150,10 @@ public class Electricity {
 	}
 
 	private void commonSetup(final FMLCommonSetupEvent event) {
-		event.enqueueWork(ElectricityNetworking::init);
+		event.enqueueWork(() -> {
+			ElectricityNetworking.init();
+			ObjDefinitions.bootstrap();
+		});
 	}
 
 	@SubscribeEvent
