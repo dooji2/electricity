@@ -1,0 +1,16 @@
+{
+  "type": "electricity:workbench",
+  "pattern": [
+    "CCC",
+    "GRG",
+    "CCC"
+  ],
+  "key": {
+    "C": { "item": "minecraft:copper_ingot" },
+    "R": { "item": "minecraft:redstone" },
+    "G": { "item": "minecraft:glass_pane" }
+  },
+  "result": {
+    "item": "electricity:circuit_board"
+  }
+}

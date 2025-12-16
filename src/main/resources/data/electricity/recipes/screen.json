@@ -1,0 +1,16 @@
+{
+  "type": "electricity:workbench",
+  "pattern": [
+    "GLG",
+    "GRG",
+    "GLG"
+  ],
+  "key": {
+    "G": { "item": "minecraft:glass_pane" },
+    "L": { "item": "minecraft:glowstone_dust" },
+    "R": { "item": "minecraft:redstone" }
+  },
+  "result": {
+    "item": "electricity:screen"
+  }
+}

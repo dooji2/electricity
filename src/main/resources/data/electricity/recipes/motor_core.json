@@ -1,0 +1,16 @@
+{
+  "type": "electricity:workbench",
+  "pattern": [
+    " C ",
+    "IRI",
+    " C "
+  ],
+  "key": {
+    "I": { "item": "minecraft:iron_ingot" },
+    "R": { "item": "minecraft:redstone" },
+    "C": { "item": "minecraft:copper_ingot" }
+  },
+  "result": {
+    "item": "electricity:motor_core"
+  }
+}

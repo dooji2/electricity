@@ -1,0 +1,16 @@
+{
+  "type": "electricity:workbench",
+  "pattern": [
+    "N N",
+    "NGN",
+    "N N"
+  ],
+  "key": {
+    "G": { "item": "minecraft:glass" },
+    "N": { "item": "minecraft:iron_nugget" }
+  },
+  "result": {
+    "item": "electricity:insulator",
+    "count": 3
+  }
+}
