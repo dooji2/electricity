@@ -1,0 +1,11 @@
+{
+  "replace": false,
+  "values": [
+    "electricity:utility_pole",
+    "electricity:electric_cabin",
+    "electricity:power_box",
+    "electricity:wind_turbine",
+    "electricity:electric_lamp",
+    "electricity:workbench"
+  ]
+}
