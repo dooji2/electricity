@@ -1,0 +1,14 @@
+{
+  "type": "electricity:workbench",
+  "pattern": [
+    " I ",
+    " I ",
+    " I "
+  ],
+  "key": {
+    "I": { "item": "minecraft:iron_ingot" }
+  },
+  "result": {
+    "item": "electricity:power_wrench"
+  }
+}
