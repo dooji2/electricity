@@ -77,8 +77,12 @@ public final class TurbineTelemetrySimulator {
 
 		// ---- measured ----
 		out.put(TurbineTelemetry.WIND_SPEED, s.windSpeed());
-		out.put(TurbineTelemetry.WIND_DIR, s.windDirection());
-		out.put(TurbineTelemetry.NACELLE_DIR, s.nacelleDir());
+		// both headings are normalised to a 0..360 compass. The mod's weather uses its
+		// own wrapDegrees, which returns 0..360, while the nacelle yaw goes through
+		// Minecraft's, which returns -180..180: exposed raw, the two would be on
+		// different conventions and comparing them would give nonsense
+		out.put(TurbineTelemetry.WIND_DIR, compass(s.windDirection()));
+		out.put(TurbineTelemetry.NACELLE_DIR, compass(s.nacelleDir()));
 		out.put(TurbineTelemetry.ROTOR_RPM, rotorRpm);
 		out.put(TurbineTelemetry.ACTIVE_POWER, s.activePowerKw());
 		out.put(TurbineTelemetry.ACTIVE_POWER_LIMIT, s.activePowerLimitKw());
@@ -215,6 +219,11 @@ public final class TurbineTelemetrySimulator {
 		if (span <= 0.0) return 0.0;
 
 		return Mth.clamp((s.alignedWindSpeed() - WindTurbineBlockEntity.RATED_SPEED) / span, 0.0, 1.0) * MAX_REGULATING_PITCH;
+	}
+
+	/** Any heading onto a 0..360 compass, whichever wrapping convention it arrived with. */
+	private static double compass(double degrees) {
+		return ((degrees % 360.0) + 360.0) % 360.0;
 	}
 
 	/** Fine pitch to full feather is the whole mechanical travel; nothing reports outside it. */
