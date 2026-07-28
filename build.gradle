@@ -123,6 +123,15 @@ repositories {
         }
     }
 
+    // CC:Tweaked is not on Maven Central for 1.20.1, only on its own maven
+    maven {
+        name = 'CC:Tweaked'
+        url = 'https://squiddev.cc/maven/'
+        content {
+            includeGroup 'cc.tweaked'
+        }
+    }
+
     // If you have mod jar dependencies in ./libs, you can declare them as a repository like so.
     // See https://docs.gradle.org/current/userguide/declaring_repositories.html#sub:flat_dir_resolver
     // flatDir {
@@ -145,6 +154,11 @@ dependencies {
     // Present only so runClient/runServer can exercise the integration
     runtimeOnly fg.deobf("mekanism:Mekanism:${mekanism_version}")
     runtimeOnly fg.deobf("mekanism:Mekanism:${mekanism_version}:generators")
+
+    // Optional ComputerCraft integration, same soft-dependency arrangement:
+    // everything touching dan200.* lives in com.dooji.electricity.compat.computercraft.
+    compileOnly "cc.tweaked:cc-tweaked-${minecraft_version}-forge-api:${cctweaked_version}"
+    runtimeOnly fg.deobf("cc.tweaked:cc-tweaked-${minecraft_version}-forge:${cctweaked_version}")
 
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime

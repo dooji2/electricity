@@ -1,6 +1,7 @@
 package com.dooji.electricity.block;
 
 import com.dooji.electricity.api.power.IEnergyBudget;
+import com.dooji.electricity.api.power.TurbineTelemetry;
 import com.dooji.electricity.client.TrackedBlockEntities;
 import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
 import com.dooji.electricity.client.wire.InsulatorLookup;
@@ -12,6 +13,7 @@ import com.dooji.electricity.main.registry.ObjBlockDefinition;
 import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.main.weather.GlobalWeatherManager;
 import com.dooji.electricity.main.weather.WeatherSnapshot;
+import com.dooji.electricity.power.TurbineTelemetrySimulator;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
 import java.util.List;
 import javax.annotation.Nonnull;
@@ -60,9 +62,11 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private float yaw = 0.0f;
 	private float lastSentYaw = Float.NaN;
 	private long lastSyncTick = 0L;
-	private static final float CUT_IN_SPEED = 3.0f;
-	private static final float RATED_SPEED = 12.0f;
-	private static final float CUTOFF_SPEED = 22.0f;
+	public static final float CUT_IN_SPEED = 3.0f;
+	public static final float RATED_SPEED = 12.0f;
+	public static final float CUTOFF_SPEED = 22.0f;
+	/** Output at rated wind speed, derived from the generation curve so the two cannot drift apart. */
+	public static final double RATED_POWER_KW = powerForWindSpeed(RATED_SPEED);
 	private static final float YAW_STEP = 0.25f;
 	private static final float YAW_DEADBAND = 7.5f;
 
@@ -72,6 +76,15 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private double claimedJoules = 0.0;
 	private final LazyOptional<IEnergyStorage> forgeEnergy = LazyOptional.of(() -> EnergyBridge.forgeEnergyView(this));
 	private final LazyOptional<?> mekanismEnergy = EnergyBridge.createMekanismHandler(this);
+
+	// Telemetry is published as one finished snapshot per tick rather than read
+	// field by field, because ComputerCraft calls in from the computer thread: a
+	// reader would otherwise race the server thread and could mix values from two
+	// different ticks. Volatile makes the completed snapshot visible atomically.
+	private final TurbineTelemetrySimulator telemetrySimulator = new TurbineTelemetrySimulator();
+	private volatile TurbineTelemetry telemetry = TurbineTelemetry.EMPTY;
+	private double yawCableTwist = 0.0;
+	private boolean yawing = false;
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -206,10 +219,61 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 			return;
 		}
 
-		float capped = Math.min(effectiveWindSpeed, RATED_SPEED);
+		generatedPower = powerForWindSpeed(effectiveWindSpeed);
+	}
+
+	/**
+	 * The generation curve. Clamping at the rated speed is what gives the turbine
+	 * its power plateau in strong wind, which on a real machine is the blades
+	 * pitching out; the telemetry reports that pitch angle from the same clamp.
+	 */
+	private static double powerForWindSpeed(float windSpeed) {
+		float capped = Math.min(windSpeed, RATED_SPEED);
 		double normalized = Math.min(1.0, capped / 16.0f);
-		double energyFactor = normalized * normalized;
-		generatedPower = 140.0 * energyFactor;
+		return 140.0 * normalized * normalized;
+	}
+
+	/** Gross production before the output cap and before anything claims it, in Joules per tick. */
+	public double getGrossJoulesPerTick() {
+		return Math.max(0.0, generatedPower) * EnergyBridge.JOULES_PER_KW;
+	}
+
+	/**
+	 * The latest published snapshot. Safe to read from any thread; never null.
+	 */
+	public TurbineTelemetry getTelemetry() {
+		return telemetry;
+	}
+
+	private void updateTelemetry() {
+		if (level == null || level.isClientSide()) return;
+
+		// Minecraft's biome temperature is a 0..2 scale, so map it onto something a
+		// thermometer would show: snowy reads about -5C, plains 11C, desert 35C
+		double ambientTempC = level.getBiome(worldPosition).value().getBaseTemperature() * 20.0 - 5.0;
+		boolean powerLimited = cutOutActive || lastAlignedWindSpeed > RATED_SPEED;
+
+		telemetry = telemetrySimulator.sample(new TurbineTelemetrySimulator.Sample(
+				Math.max(0.0, generatedPower),
+				RATED_POWER_KW,
+				RATED_POWER_KW,
+				powerLimited,
+				lastEffectiveWindSpeed,
+				lastAlignedWindSpeed,
+				windDirection,
+				getYaw(),
+				turbulence,
+				rotationSpeed1,
+				cutOutActive,
+				yawing,
+				ambientTempC,
+				worldPosition.getY(),
+				level.isRaining(),
+				level.isThundering(),
+				level.getGameTime(),
+				Math.abs(worldPosition.hashCode() % 1024),
+				yawCableTwist
+		));
 	}
 
 	/**
@@ -358,6 +422,7 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		refreshEnergyBudget();
 		EnergyBridge.emit(this, this, energyFaces());
 
+		updateTelemetry();
 		maybeSync();
 	}
 
@@ -394,6 +459,7 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 
 		windDirection = tag.getFloat("windDirection");
 		turbulence = tag.contains("turbulence") ? tag.getDouble("turbulence") : 0.0;
+		yawCableTwist = tag.getDouble("yawCableTwist");
 
 		updateWirePositions();
 	}
@@ -441,6 +507,10 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		tag.putFloat("yaw", yaw);
 		tag.putFloat("windDirection", windDirection);
 		tag.putDouble("turbulence", turbulence);
+		// the one telemetry value that is real accumulated state rather than a
+		// reading, so it has to survive a reload; the simulated temperatures do not,
+		// they just warm up from ambient again
+		tag.putDouble("yawCableTwist", yawCableTwist);
 	}
 
 	@Override
@@ -549,11 +619,18 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 			yawInitialized = true;
 		}
 
+		yawing = false;
 		float target = windDirection;
 		float delta = Mth.wrapDegrees(target - yaw);
 		if (Math.abs(delta) <= YAW_DEADBAND) return;
 		float step = Mth.clamp(delta, -YAW_STEP, YAW_STEP);
 		yaw = Mth.wrapDegrees(yaw + step);
+		yawing = true;
+
+		// signed accumulation, so the twist tracks net rotation rather than total
+		// travel. The wind wanders both ways, so this random-walks around zero
+		// instead of growing without bound; the mod does not model an untwist cycle.
+		yawCableTwist += step;
 	}
 
 	private float alignmentFactor() {
