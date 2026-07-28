@@ -51,6 +51,10 @@ public final class TurbineTelemetry {
 	public static final String AMBIENT_TEMP = "ambientTemp";
 	public static final String TURBULENCE = "turbulence";
 	public static final String YAW_CABLE_TWIST = "yawCableTwist";
+	public static final String RUNNING = "running";
+	public static final String WIND_CUT_OUT = "windCutOut";
+	public static final String STOPPED_BY_COMPUTER = "stoppedByComputer";
+	public static final String STOPPED_BY_REDSTONE = "stoppedByRedstone";
 
 	// derived
 	public static final String GENERATOR_RPM = "generatorRpm";
@@ -156,7 +160,8 @@ public final class TurbineTelemetry {
 
 	private static Map<String, Kind> buildKinds() {
 		Map<String, Kind> kinds = new LinkedHashMap<>();
-		for (String tag : new String[]{WIND_SPEED, WIND_DIR, NACELLE_DIR, ROTOR_RPM, ACTIVE_POWER, ACTIVE_POWER_LIMIT, POWER_LIMITATION_ACTIVE, AMBIENT_TEMP, TURBULENCE, YAW_CABLE_TWIST}) {
+		for (String tag : new String[]{WIND_SPEED, WIND_DIR, NACELLE_DIR, ROTOR_RPM, ACTIVE_POWER, ACTIVE_POWER_LIMIT, POWER_LIMITATION_ACTIVE, AMBIENT_TEMP, TURBULENCE, YAW_CABLE_TWIST,
+				RUNNING, WIND_CUT_OUT, STOPPED_BY_COMPUTER, STOPPED_BY_REDSTONE}) {
 			kinds.put(tag, Kind.MEASURED);
 		}
 

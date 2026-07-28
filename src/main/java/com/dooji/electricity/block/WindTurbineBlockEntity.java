@@ -1,6 +1,7 @@
 package com.dooji.electricity.block;
 
 import com.dooji.electricity.api.power.IEnergyBudget;
+import com.dooji.electricity.api.power.RedstoneMode;
 import com.dooji.electricity.api.power.TurbineTelemetry;
 import com.dooji.electricity.client.TrackedBlockEntities;
 import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
@@ -85,6 +86,15 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private volatile TurbineTelemetry telemetry = TurbineTelemetry.EMPTY;
 	private double yawCableTwist = 0.0;
 	private boolean yawing = false;
+
+	// Control state. Volatile because a ComputerCraft program reads it from the
+	// computer thread; writes come back through the server thread, see the setters.
+	private volatile boolean stoppedByComputer = false;
+	private volatile RedstoneMode redstoneMode = RedstoneMode.DISABLED;
+	private volatile boolean redstonePowered = false;
+	private volatile double activePowerLimitKw = RATED_POWER_KW;
+	/** What the wind alone would have produced, before curtailment. */
+	private double uncappedPower = 0.0;
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -201,7 +211,7 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	}
 
 	public boolean isSurging() {
-		return turbulence >= 0.35 && lastEffectiveWindSpeed < CUTOFF_SPEED && !cutOutActive;
+		return turbulence >= 0.35 && lastEffectiveWindSpeed < CUTOFF_SPEED && !isBraked();
 	}
 
 	public double getCurrentPower() {
@@ -214,12 +224,100 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 
 	private void updateGeneratedPower() {
 		float effectiveWindSpeed = Math.max(0.0f, lastAlignedWindSpeed);
-		if (cutOutActive || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= CUTOFF_SPEED) {
+		if (isBraked() || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= CUTOFF_SPEED) {
+			uncappedPower = 0.0;
 			generatedPower = 0.0;
 			return;
 		}
 
-		generatedPower = powerForWindSpeed(effectiveWindSpeed);
+		uncappedPower = powerForWindSpeed(effectiveWindSpeed);
+		generatedPower = Math.min(uncappedPower, Math.max(0.0, activePowerLimitKw));
+	}
+
+	// ---- control ----
+
+	/**
+	 * Whether the rotor is held stopped, for any reason: the machine protecting
+	 * itself in a gale, a command from a computer, or a redstone signal. Everything
+	 * that should not happen on a stopped turbine keys off this rather than off the
+	 * wind cut-out alone.
+	 */
+	public boolean isBraked() {
+		return cutOutActive || stoppedByComputer || !redstoneMode.allowsRunning(redstonePowered);
+	}
+
+	public boolean isRunning() {
+		return !isBraked();
+	}
+
+	public boolean isStoppedByComputer() {
+		return stoppedByComputer;
+	}
+
+	public boolean isStoppedByRedstone() {
+		return !redstoneMode.allowsRunning(redstonePowered);
+	}
+
+	public boolean isWindCutOut() {
+		return cutOutActive;
+	}
+
+	public RedstoneMode getRedstoneMode() {
+		return redstoneMode;
+	}
+
+	public double getActivePowerLimit() {
+		return activePowerLimitKw;
+	}
+
+	/**
+	 * Stops or releases the turbine. Must be called from the server thread: it marks
+	 * the block entity dirty and pushes the new state to clients so the rotor stops
+	 * on screen too.
+	 */
+	public void setStoppedByComputer(boolean stopped) {
+		if (stoppedByComputer == stopped) return;
+
+		stoppedByComputer = stopped;
+		onControlChanged();
+	}
+
+	public void setRedstoneMode(RedstoneMode mode) {
+		if (mode == null || redstoneMode == mode) return;
+
+		redstoneMode = mode;
+		onControlChanged();
+	}
+
+	/** Curtailment setpoint in kW, clamped to what the machine can actually produce. */
+	public void setActivePowerLimit(double limitKw) {
+		double clamped = Mth.clamp(limitKw, 0.0, RATED_POWER_KW);
+		if (activePowerLimitKw == clamped) return;
+
+		activePowerLimitKw = clamped;
+		onControlChanged();
+	}
+
+	private void onControlChanged() {
+		setChanged();
+		// pushed immediately rather than waiting for the periodic sync, so a stop
+		// command is visible on the rotor at once instead of up to half a second later
+		syncStateToClients();
+	}
+
+	private void pollRedstone() {
+		if (level == null || level.isClientSide()) return;
+
+		boolean powered = level.hasNeighborSignal(worldPosition);
+		if (powered == redstonePowered) return;
+
+		redstonePowered = powered;
+		// only matters visually when the mode actually reacts to redstone
+		if (redstoneMode != RedstoneMode.DISABLED) {
+			onControlChanged();
+		} else {
+			setChanged();
+		}
 	}
 
 	/**
@@ -253,12 +351,14 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		// a roof, and the thermometer should agree with what is actually overhead
 		boolean precipitating = level.isRainingAt(worldPosition.above());
 		boolean storming = level.isThundering() && precipitating;
-		boolean powerLimited = cutOutActive || lastAlignedWindSpeed > RATED_SPEED;
+		// the machine is not giving everything it could: braked, pitching out above the
+		// rated wind, or held down by a curtailment setpoint
+		boolean powerLimited = isBraked() || lastAlignedWindSpeed > RATED_SPEED || uncappedPower > generatedPower;
 
 		telemetry = telemetrySimulator.sample(new TurbineTelemetrySimulator.Sample(
 				Math.max(0.0, generatedPower),
 				RATED_POWER_KW,
-				RATED_POWER_KW,
+				activePowerLimitKw,
 				powerLimited,
 				lastEffectiveWindSpeed,
 				lastAlignedWindSpeed,
@@ -266,7 +366,10 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 				getYaw(),
 				turbulence,
 				rotationSpeed1,
+				isBraked(),
 				cutOutActive,
+				stoppedByComputer,
+				isStoppedByRedstone(),
 				yawing,
 				ambientTemperature(precipitating, storming),
 				worldPosition.getY(),
@@ -453,7 +556,8 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 			cutOutActive = false;
 		}
 
-		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, cutOutActive);
+		pollRedstone();
+		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, isBraked());
 		updateGeneratedPower();
 
 		// push before the wire network runs. Block entities tick inside the level tick,
@@ -500,6 +604,14 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		windDirection = tag.getFloat("windDirection");
 		turbulence = tag.contains("turbulence") ? tag.getDouble("turbulence") : 0.0;
 		yawCableTwist = tag.getDouble("yawCableTwist");
+
+		stoppedByComputer = tag.getBoolean("stoppedByComputer");
+		redstonePowered = tag.getBoolean("redstonePowered");
+		RedstoneMode savedMode = RedstoneMode.byName(tag.getString("redstoneMode"));
+		redstoneMode = savedMode != null ? savedMode : RedstoneMode.DISABLED;
+		// an older turbine has no setpoint saved, so it defaults to uncurtailed rather
+		// than to a limit of zero, which would silently switch it off on load
+		activePowerLimitKw = tag.contains("activePowerLimitKw") ? tag.getDouble("activePowerLimitKw") : RATED_POWER_KW;
 
 		updateWirePositions();
 	}
@@ -551,6 +663,13 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		// reading, so it has to survive a reload; the simulated temperatures do not,
 		// they just warm up from ambient again
 		tag.putDouble("yawCableTwist", yawCableTwist);
+
+		// all four are written because getUpdateTag() routes through here: the client
+		// needs every input to isBraked() to decide whether to animate the rotor
+		tag.putBoolean("stoppedByComputer", stoppedByComputer);
+		tag.putBoolean("redstonePowered", redstonePowered);
+		tag.putString("redstoneMode", redstoneMode.name());
+		tag.putDouble("activePowerLimitKw", activePowerLimitKw);
 	}
 
 	@Override
@@ -636,7 +755,9 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 
 		float appliedSpeed1 = rotationSpeed1;
 		float appliedSpeed2 = rotationSpeed2;
-		if (!cutOutActive) {
+		// a braked rotor must not be spun up by the client's own guess. All the inputs
+		// to isBraked() are synced, so the client reaches the same conclusion.
+		if (!isBraked()) {
 			if (rotationSpeed1 == 0.0f && effectiveSpeed > 0.0f) {
 				appliedSpeed1 = Math.min(12.0f, effectiveSpeed * 0.6f);
 			}

@@ -1,10 +1,12 @@
 package com.dooji.electricity.compat.computercraft;
 
+import com.dooji.electricity.api.power.RedstoneMode;
 import com.dooji.electricity.api.power.TurbineTelemetry;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
 import dan200.computercraft.api.ForgeComputerCraftAPI;
 import dan200.computercraft.api.lua.ILuaContext;
 import dan200.computercraft.api.lua.IArguments;
+import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.api.lua.LuaFunction;
 import dan200.computercraft.api.lua.MethodResult;
 import dan200.computercraft.api.peripheral.IComputerAccess;
@@ -123,6 +125,90 @@ public final class CCTweakedPeripherals {
 		@LuaFunction
 		public final boolean isBlacklistedDimension() {
 			return false;
+		}
+
+		// ---- control ----
+		//
+		// Every method that changes the turbine runs with mainThread = true. Reads are
+		// served from the per-tick snapshot and are safe from the computer thread, but a
+		// write has to mark the block entity dirty and push the new state to clients,
+		// which is only legal on the server thread.
+
+		/** Applies the brake. The rotor stops, the blades feather and output goes to zero. */
+		@LuaFunction(mainThread = true)
+		public final void stop() {
+			turbine.setStoppedByComputer(true);
+		}
+
+		/** Releases a stop issued by {@link #stop()}. Does not override a redstone stop or a wind cut-out. */
+		@LuaFunction(mainThread = true)
+		public final void start() {
+			turbine.setStoppedByComputer(false);
+		}
+
+		/** Whether this turbine is stopped specifically by a computer command. */
+		@LuaFunction
+		public final boolean isStopped() {
+			return turbine.isStoppedByComputer();
+		}
+
+		/** Whether the rotor is turning and allowed to generate, for any reason. */
+		@LuaFunction
+		public final boolean isRunning() {
+			return turbine.isRunning();
+		}
+
+		/** True when the machine stopped itself because the wind exceeded its cut-out speed. */
+		@LuaFunction
+		public final boolean isWindCutOut() {
+			return turbine.isWindCutOut();
+		}
+
+		/** True when the current redstone mode and signal are holding the turbine down. */
+		@LuaFunction
+		public final boolean isStoppedByRedstone() {
+			return turbine.isStoppedByRedstone();
+		}
+
+		/** "DISABLED", "HIGH" or "LOW". Same names Mekanism uses. */
+		@LuaFunction
+		public final String getRedstoneMode() {
+			return turbine.getRedstoneMode().name();
+		}
+
+		/**
+		 * Sets how the turbine reacts to redstone. Mekanism's fourth mode, PULSE, is not
+		 * accepted: a generator runs continuously and has nothing to pulse, so taking it
+		 * silently would be a lie.
+		 */
+		@LuaFunction(mainThread = true)
+		public final void setRedstoneMode(String mode) throws LuaException {
+			RedstoneMode parsed = RedstoneMode.byName(mode);
+			if (parsed == null) {
+				throw new LuaException("unknown redstone mode '" + mode + "', expected DISABLED, HIGH or LOW");
+			}
+
+			turbine.setRedstoneMode(parsed);
+		}
+
+		/** Curtailment setpoint in kW. */
+		@LuaFunction
+		public final double getActivePowerLimit() {
+			return turbine.getActivePowerLimit();
+		}
+
+		/**
+		 * Caps output at {@code limitKw}. Clamped to the machine's rated power, so it
+		 * cannot be used to make the turbine produce more than the wind allows. Setting
+		 * zero curtails it fully, which stops the output without applying the brake.
+		 */
+		@LuaFunction(mainThread = true)
+		public final void setActivePowerLimit(double limitKw) throws LuaException {
+			if (Double.isNaN(limitKw) || Double.isInfinite(limitKw)) {
+				throw new LuaException("active power limit must be a finite number of kW");
+			}
+
+			turbine.setActivePowerLimit(limitKw);
 		}
 
 		// ---- telemetry ----

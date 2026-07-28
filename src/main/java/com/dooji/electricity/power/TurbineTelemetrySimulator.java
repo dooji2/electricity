@@ -51,7 +51,11 @@ public final class TurbineTelemetrySimulator {
 			double nacelleDir,
 			double turbulence,
 			double rotorDegreesPerTick,
-			boolean cutOut,
+			/** Rotor is held stopped, whatever the reason: wind cut-out or a command. */
+			boolean braked,
+			boolean windCutOut,
+			boolean stoppedByComputer,
+			boolean stoppedByRedstone,
 			boolean yawing,
 			double ambientTempC,
 			int blockY,
@@ -71,7 +75,7 @@ public final class TurbineTelemetrySimulator {
 
 		double rotorRpm = s.rotorDegreesPerTick() * 20.0 * 60.0 / 360.0;
 		double pitch = bladePitch(s);
-		double pitchActivity = s.cutOut() || pitch > 0.5 ? 1.0 : 0.15;
+		double pitchActivity = s.braked() || pitch > 0.5 ? 1.0 : 0.15;
 
 		TurbineTelemetry.Builder out = TurbineTelemetry.builder();
 
@@ -90,6 +94,12 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.AMBIENT_TEMP, ambient);
 		out.put(TurbineTelemetry.TURBULENCE, s.turbulence());
 		out.put(TurbineTelemetry.YAW_CABLE_TWIST, s.yawCableTwist());
+		// the reasons are kept apart from the fact: a program that shuts a turbine down
+		// needs to tell its own command from the machine protecting itself in a gale
+		out.put(TurbineTelemetry.RUNNING, !s.braked());
+		out.put(TurbineTelemetry.WIND_CUT_OUT, s.windCutOut());
+		out.put(TurbineTelemetry.STOPPED_BY_COMPUTER, s.stoppedByComputer());
+		out.put(TurbineTelemetry.STOPPED_BY_REDSTONE, s.stoppedByRedstone());
 
 		// ---- derived ----
 		out.put(TurbineTelemetry.GENERATOR_RPM, rotorRpm * GEARBOX_RATIO);
@@ -116,12 +126,14 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.V23, v23);
 		out.put(TurbineTelemetry.V31, v31);
 
-		// clamped at zero: the wobble is instrument noise, and on an idle machine it
-		// would otherwise push the reading negative, which no ammeter ever shows
+		// the per-phase variation is a fraction of the current rather than an offset on
+		// top of it. An additive term would survive at zero current and report amps
+		// flowing while apparent power read exactly zero, which cannot both be true; it
+		// also could not go negative, so no clamp is needed either.
 		double lineCurrent = busVoltage <= 0.0 ? 0.0 : apparent * 1000.0 / (Math.sqrt(3.0) * busVoltage);
-		out.put(TurbineTelemetry.I1, Math.max(0.0, lineCurrent * (1.0 + 0.004) + wobble(s, 197.0, 0.15)));
-		out.put(TurbineTelemetry.I2, Math.max(0.0, lineCurrent * (1.0 - 0.006) + wobble(s, 223.0, 0.15)));
-		out.put(TurbineTelemetry.I3, Math.max(0.0, lineCurrent * (1.0 + 0.002) + wobble(s, 241.0, 0.15)));
+		out.put(TurbineTelemetry.I1, lineCurrent * (1.004 + wobble(s, 197.0, 0.002)));
+		out.put(TurbineTelemetry.I2, lineCurrent * (0.994 + wobble(s, 223.0, 0.002)));
+		out.put(TurbineTelemetry.I3, lineCurrent * (1.002 + wobble(s, 241.0, 0.002)));
 
 		// the three blades never track the collective demand perfectly, but they cannot
 		// leave the mechanical range either: clamped to fine pitch at one end and full
@@ -189,7 +201,7 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.GEARBOX_OIL_PRESS_PUMP, spinning ? 4.5 + 2.0 * load + wobble(s, 79.0, 0.08) : 0.0);
 		out.put(TurbineTelemetry.HYDR_SYSTEM_PRESS, 190.0 + 20.0 * load + wobble(s, 151.0, 1.2));
 		// the main brake only goes on when the machine has shut itself down
-		out.put(TurbineTelemetry.HYDR_MAIN_BRAKES_PRESS, s.cutOut() ? 178.0 + wobble(s, 167.0, 1.5) : 4.0 + wobble(s, 167.0, 0.3));
+		out.put(TurbineTelemetry.HYDR_MAIN_BRAKES_PRESS, s.braked() ? 178.0 + wobble(s, 167.0, 1.5) : 4.0 + wobble(s, 167.0, 0.3));
 		out.put(TurbineTelemetry.YAW_H_ACCU_PRESS, 148.0 + 6.0 * load + wobble(s, 181.0, 1.0));
 		out.put(TurbineTelemetry.YAW_HYDR_BRK_PRESS, s.yawing() ? 58.0 + wobble(s, 139.0, 1.4) : 12.0 + wobble(s, 139.0, 0.4));
 
@@ -212,7 +224,7 @@ public final class TurbineTelemetrySimulator {
 		// freewheeling, because updateRotorSpeeds only drives it to a stop on cut-out,
 		// and a feathered rotor does not turn: reporting 90 degrees there would
 		// contradict the rotor speed sitting right next to it in the same snapshot
-		if (s.cutOut()) return 90.0;
+		if (s.braked()) return 90.0;
 		if (s.alignedWindSpeed() <= WindTurbineBlockEntity.RATED_SPEED) return 0.0;
 
 		double span = WindTurbineBlockEntity.CUTOFF_SPEED - WindTurbineBlockEntity.RATED_SPEED;
