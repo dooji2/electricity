@@ -112,10 +112,12 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.V23, v23);
 		out.put(TurbineTelemetry.V31, v31);
 
+		// clamped at zero: the wobble is instrument noise, and on an idle machine it
+		// would otherwise push the reading negative, which no ammeter ever shows
 		double lineCurrent = busVoltage <= 0.0 ? 0.0 : apparent * 1000.0 / (Math.sqrt(3.0) * busVoltage);
-		out.put(TurbineTelemetry.I1, lineCurrent * (1.0 + 0.004) + wobble(s, 197.0, 0.15));
-		out.put(TurbineTelemetry.I2, lineCurrent * (1.0 - 0.006) + wobble(s, 223.0, 0.15));
-		out.put(TurbineTelemetry.I3, lineCurrent * (1.0 + 0.002) + wobble(s, 241.0, 0.15));
+		out.put(TurbineTelemetry.I1, Math.max(0.0, lineCurrent * (1.0 + 0.004) + wobble(s, 197.0, 0.15)));
+		out.put(TurbineTelemetry.I2, Math.max(0.0, lineCurrent * (1.0 - 0.006) + wobble(s, 223.0, 0.15)));
+		out.put(TurbineTelemetry.I3, Math.max(0.0, lineCurrent * (1.0 + 0.002) + wobble(s, 241.0, 0.15)));
 
 		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE, pitch);
 		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_1, pitch + wobble(s, 89.0, 0.25));
