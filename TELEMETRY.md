@@ -159,60 +159,117 @@ All readings are rounded to two decimals.
 
 ## Power curve
 
-Four thresholds, and they do not all read the same wind speed. Cut-in and the rise
-are indexed on the **aligned** wind — the component the rotor actually sees, which
-is `windSpeed × cos³(windDir − nacelleDir)`. The storm shutdown latch reads the
-**raw** wind instead, because a machine protects itself from the wind that hits it,
-not from the useful component.
+### The x axis is not `windSpeed`
 
-| Threshold | Speed | Reads | Behaviour |
-|---|---|---|---|
-| Cut-in | 3 m/s | aligned | inclusive; steps straight to 4.92 kW |
-| Rated | 12 m/s | aligned | plateau begins at 78.75 kW |
-| Storm onset | 22 m/s | aligned | output derates, machine stays on load |
-| Shutdown | 25 m/s | raw | brake on, blades feathered, latching |
-| Re-arm | 20 m/s | raw | releases the shutdown latch |
+`getWindSpeed()` reports the **raw** wind at the nacelle. The rotor is driven by the
+**aligned** wind — the component left after the yaw error — and there is no tag for
+it, so a curve plotted against `windSpeed` comes out as a cloud of points rather
+than a curve. The same raw speed produces different power depending on how far the
+nacelle is turned away.
 
 ```
-P(v) = 0                                    v < 3
-P(v) = 140 · (min(v,12)/16)²                3 ≤ v < 22
-P(v) = 140 · (12/16)² · (1 − 0.2(v−21))     22 ≤ v < 25
-P(v) = 0                                    v ≥ 25
+alignedWind = windSpeed × cos³(Δ),   Δ = the smaller angle between windDir and nacelleDir
 ```
 
-The derating sheds a fifth of rated per m/s, so it lands on 80%, 60% and 40% at 22,
-23 and 24. It is a continuous ramp, not a step per whole m/s: a staircase would put
+Both headings are on a 0–360 compass, so `Δ = |windDir − nacelleDir|`, wrapped to
+180 if it comes out larger.
+
+| Yaw error Δ | cos³(Δ) | Power kept |
+|---|---|---|
+| 0° | 1.0000 | 100% |
+| 5° | 0.9886 | 98.9% |
+| 7.5° | 0.9746 | 97.5% |
+| 10° | 0.9551 | 95.5% |
+| 15° | 0.9012 | 90.1% |
+| 20° | 0.8298 | 83.0% |
+| 30° | 0.6495 | 65.0% |
+| 45° | 0.3536 | 35.4% |
+| 60° | 0.1250 | 12.5% |
+| 75° | 0.0173 | 1.7% |
+| ≥ 90° | 0 | 0% |
+
+Yaw only corrects past a 7.5° deadband and then at 0.25°/tick, so in steady wind the
+nacelle sits up to 7.5° off and gives up about 2.5% without ever correcting. Expect
+that as a persistent floor on measured points, not as noise.
+
+### Thresholds
+
+Five of them, and they do not all read the same speed. Cut-in, rated and the storm
+onset read the **aligned** wind; the shutdown latch and its re-arm read the **raw**
+wind, because a machine protects itself from the wind that hits it, not from the
+useful component.
+
+| Threshold | Speed | Reads | Boundary | Behaviour |
+|---|---|---|---|---|
+| Cut-in | 3 m/s | aligned | generates at `v ≥ 3` | steps straight to 4.922 kW |
+| Rated | 12 m/s | aligned | plateau at `v ≥ 12` | 78.750 kW, blades start pitching out |
+| Storm onset | 22 m/s | aligned | full output to `v < 22` | derates, stays on load |
+| Shutdown | 25 m/s | raw | brakes at `v ≥ 25` | brake on, blades feathered, latching |
+| Re-arm | 20 m/s | raw | releases at `v ≤ 20` | latch clears |
+
+21.99 m/s still gives full output; 22.00 gives 80%. 24.99 still generates; 25.00 is
+braked. A latched shutdown clears only once the raw wind is back at or below 20.
+
+Because the shutdown reads raw wind while the curve is indexed on aligned wind, a
+badly yawed turbine can brake while its aligned speed is only 15 m/s or so. The
+plateau will look like it ends early and at inconsistent places. That is the latch,
+not noise.
+
+### Formula
+
+```
+P(v) = 0                                    v < 3          off
+P(v) = 140 · (min(v,12)/16)²                3 ≤ v < 22     rise, then plateau from 12
+P(v) = 78.75 · (1 − 0.2·(v − 21))           22 ≤ v < 25    storm derating
+P(v) = 0                                    v ≥ 25         braked
+```
+
+`v` is the aligned wind in m/s, `P` in kW. `140 · (12/16)² = 78.75`, the rated
+output.
+
+The derating sheds a fifth of rated per m/s, landing on 80%, 60% and 40% at 22, 23
+and 24. It is a continuous ramp rather than a step per whole m/s: stepping would put
 three fresh discontinuities into the curve, which is what derating exists to avoid.
 
-Two discontinuities remain by design. At 22 the plateau drops to 80% (78.75 → 63.00)
-because the ramp starts at 80% rather than 100%, and at 25 the machine brakes from
-whatever it was still making (~19.7 kW) to zero.
+Three discontinuities remain, all deliberate:
 
-The curve below assumes zero yaw error, which is how a power curve is conventionally
-specified. `descending` is the branch taken after a shutdown: the latch re-arms only
-at 20 m/s, so coming down from a storm the whole 20–25 band reads zero.
+- **at 3** — 0 jumps to 4.922 kW as the generator connects. Do not interpolate
+  between 2.9 and 3.0.
+- **at 22** — the plateau drops to 80%, 78.750 → 63.000, because the ramp starts at
+  80% rather than 100%.
+- **at 25** — the brake takes it from about 19.7 kW to zero.
 
-| v | kW | % rated | derate | descending |
+Curtailment applies **after** the derating, as a floor-taking minimum: at 22 m/s with
+`setActivePowerLimit(50)` the output is `min(63.000, 50) = 50`.
+
+### Values
+
+At zero yaw error, which is how a power curve is conventionally specified.
+`descending` is the branch after a latched shutdown: the latch clears only at 20, so
+coming down from a storm the whole 20–25 band reads zero and the derating band is
+never traversed downward.
+
+| v (m/s) | kW | % rated | derate | descending |
 |---|---|---|---|---|
-| 0 – 2.5 | 0 | 0% | – | 0 |
-| 3.0 | 4.922 | 6.3% | 1.00 | 4.922 |
-| 3.5 | 6.699 | 8.5% | 1.00 | 6.699 |
-| 4.0 | 8.750 | 11.1% | 1.00 | 8.750 |
-| 4.5 | 11.074 | 14.1% | 1.00 | 11.074 |
-| 5.0 | 13.672 | 17.4% | 1.00 | 13.672 |
-| 5.5 | 16.543 | 21.0% | 1.00 | 16.543 |
-| 6.0 | 19.688 | 25.0% | 1.00 | 19.688 |
-| 6.5 | 23.105 | 29.3% | 1.00 | 23.105 |
-| 7.0 | 26.797 | 34.0% | 1.00 | 26.797 |
-| 7.5 | 30.762 | 39.1% | 1.00 | 30.762 |
-| 8.0 | 35.000 | 44.4% | 1.00 | 35.000 |
-| 8.5 | 39.512 | 50.2% | 1.00 | 39.512 |
-| 9.0 | 44.297 | 56.3% | 1.00 | 44.297 |
-| 9.5 | 49.355 | 62.7% | 1.00 | 49.355 |
-| 10.0 | 54.688 | 69.4% | 1.00 | 54.688 |
-| 10.5 | 60.293 | 76.6% | 1.00 | 60.293 |
-| 11.0 | 66.172 | 84.0% | 1.00 | 66.172 |
-| 11.5 | 72.324 | 91.8% | 1.00 | 72.324 |
+| 0.0 – 2.5 | 0 | 0% | — | 0 |
+| 3.0 | 4.922 | 6.25% | 1.00 | 4.922 |
+| 3.5 | 6.699 | 8.51% | 1.00 | 6.699 |
+| 4.0 | 8.750 | 11.11% | 1.00 | 8.750 |
+| 4.5 | 11.074 | 14.06% | 1.00 | 11.074 |
+| 5.0 | 13.672 | 17.36% | 1.00 | 13.672 |
+| 5.5 | 16.543 | 21.01% | 1.00 | 16.543 |
+| 6.0 | 19.688 | 25.00% | 1.00 | 19.688 |
+| 6.5 | 23.105 | 29.34% | 1.00 | 23.105 |
+| 7.0 | 26.797 | 34.03% | 1.00 | 26.797 |
+| 7.5 | 30.762 | 39.06% | 1.00 | 30.762 |
+| 8.0 | 35.000 | 44.44% | 1.00 | 35.000 |
+| 8.5 | 39.512 | 50.17% | 1.00 | 39.512 |
+| 9.0 | 44.297 | 56.25% | 1.00 | 44.297 |
+| 9.5 | 49.355 | 62.67% | 1.00 | 49.355 |
+| 10.0 | 54.688 | 69.44% | 1.00 | 54.688 |
+| 10.5 | 60.293 | 76.56% | 1.00 | 60.293 |
+| 11.0 | 66.172 | 84.03% | 1.00 | 66.172 |
+| 11.5 | 72.324 | 91.84% | 1.00 | 72.324 |
 | 12.0 – 20.0 | 78.750 | 100% | 1.00 | 78.750 |
 | 20.5 – 21.5 | 78.750 | 100% | 1.00 | **0** |
 | 22.0 | 63.000 | 80% | 0.80 | 0 |
@@ -223,10 +280,77 @@ at 20 m/s, so coming down from a storm the whole 20–25 band reads zero.
 | 24.5 | 23.625 | 30% | 0.30 | 0 |
 | 25.0 and above | 0 | 0% | 0.00 | 0 |
 
-In Lua, the closed form beats interpolating a table:
+Half of rated falls at 8.5 m/s. Telemetry rounds to two decimals, so measured values
+will not match the third decimal here.
+
+<details>
+<summary>Same data as CSV, 0.5 m/s bins</summary>
+
+```csv
+wind_ms,power_kw,percent_rated,derating,power_kw_descending
+0.0,0.000,0.00,1.00,0.000
+0.5,0.000,0.00,1.00,0.000
+1.0,0.000,0.00,1.00,0.000
+1.5,0.000,0.00,1.00,0.000
+2.0,0.000,0.00,1.00,0.000
+2.5,0.000,0.00,1.00,0.000
+3.0,4.922,6.25,1.00,4.922
+3.5,6.699,8.51,1.00,6.699
+4.0,8.750,11.11,1.00,8.750
+4.5,11.074,14.06,1.00,11.074
+5.0,13.672,17.36,1.00,13.672
+5.5,16.543,21.01,1.00,16.543
+6.0,19.688,25.00,1.00,19.688
+6.5,23.105,29.34,1.00,23.105
+7.0,26.797,34.03,1.00,26.797
+7.5,30.762,39.06,1.00,30.762
+8.0,35.000,44.44,1.00,35.000
+8.5,39.512,50.17,1.00,39.512
+9.0,44.297,56.25,1.00,44.297
+9.5,49.355,62.67,1.00,49.355
+10.0,54.688,69.44,1.00,54.688
+10.5,60.293,76.56,1.00,60.293
+11.0,66.172,84.03,1.00,66.172
+11.5,72.324,91.84,1.00,72.324
+12.0,78.750,100.00,1.00,78.750
+12.5,78.750,100.00,1.00,78.750
+13.0,78.750,100.00,1.00,78.750
+13.5,78.750,100.00,1.00,78.750
+14.0,78.750,100.00,1.00,78.750
+14.5,78.750,100.00,1.00,78.750
+15.0,78.750,100.00,1.00,78.750
+15.5,78.750,100.00,1.00,78.750
+16.0,78.750,100.00,1.00,78.750
+16.5,78.750,100.00,1.00,78.750
+17.0,78.750,100.00,1.00,78.750
+17.5,78.750,100.00,1.00,78.750
+18.0,78.750,100.00,1.00,78.750
+18.5,78.750,100.00,1.00,78.750
+19.0,78.750,100.00,1.00,78.750
+19.5,78.750,100.00,1.00,78.750
+20.0,78.750,100.00,1.00,78.750
+20.5,78.750,100.00,1.00,0.000
+21.0,78.750,100.00,1.00,0.000
+21.5,78.750,100.00,1.00,0.000
+22.0,63.000,80.00,0.80,0.000
+22.5,55.125,70.00,0.70,0.000
+23.0,47.250,60.00,0.60,0.000
+23.5,39.375,50.00,0.50,0.000
+24.0,31.500,40.00,0.40,0.000
+24.5,23.625,30.00,0.30,0.000
+25.0,0.000,0.00,0.00,0.000
+25.5,0.000,0.00,0.00,0.000
+26.0,0.000,0.00,0.00,0.000
+```
+
+</details>
+
+### In Lua
+
+The closed form is exact everywhere, so prefer it over interpolating the bins:
 
 ```lua
-local function powerAt(v)                        -- v = aligned wind, m/s
+local function powerAt(v)                        -- v = aligned wind in m/s
   if v < 3 or v >= 25 then return 0.0 end
   local n = math.min(v, 12) / 16
   local p = 140 * n * n
@@ -243,9 +367,36 @@ local function alignedWind(d)                    -- d = getTelemetry()
 end
 ```
 
-Two things falsify a measured curve: a curtailment setpoint below rated clips it, so
-call `setActivePowerLimit(78.75)` first, and samples with `running == false` have to
-be discarded or the brake pollutes the zero.
+### Measuring it in game
+
+Four things will falsify a measured curve:
+
+1. A curtailment setpoint below rated clips the top. Call `setActivePowerLimit(78.75)`
+   before collecting.
+2. Samples with `running == false` have to be discarded, or the brake and any
+   commanded stop pollute the zero.
+3. Bin on `alignedWind(d)`, never on `d.windSpeed`.
+4. Ascending and descending samples belong on separate branches between 20 and 25,
+   because of the latch.
+
+The weather model moves the wind slowly, so filling the 3–12 m/s range takes a long
+time in real terms, and anything above 22 needs a storm.
+
+### Known deviation from real physics
+
+Wind power goes as the cube of speed, `P = ½ρAv³Cp`. This curve is **quadratic**, so
+below rated it is much fuller than a real machine's:
+
+| v | this mod (v²) | cubic law, same rated point | difference |
+|---|---|---|---|
+| 4 | 8.75 | 2.92 | +5.83 |
+| 6 | 19.69 | 9.84 | +9.84 |
+| 8 | 35.00 | 23.33 | +11.67 |
+| 10 | 54.69 | 45.57 | +9.11 |
+| 12 | 78.75 | 78.75 | 0 |
+
+That is the mod's own choice, inherited from the original generation formula, not
+something the integration introduced.
 
 ---
 
