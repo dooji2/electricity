@@ -11,7 +11,7 @@ loaderVersion="${loader_version_range}" #mandatory This is typically bumped ever
 # Review your options at https://choosealicense.com/. All rights reserved is the default copyright stance, and is thus the default here.
 license="${mod_license}"
 # A URL to refer people to when problems occur with this mod
-issueTrackerURL="https://github.com/dooji2/electricity/issues"
+issueTrackerURL="https://github.com/SimoneRecchia/electricity/issues"
 # If your mod is purely client-side and has no multiplayer functionality (be it dedicated servers or Open to LAN),
 # set this to true, and Forge will set the correct displayTest for you and skip loading your mod on dedicated servers.
 #clientSideOnly=true #optional - defaults to false if absent
@@ -26,11 +26,11 @@ displayName="${mod_name}" #mandatory
 # A URL to query for updates for this mod. See the JSON update specification https://docs.minecraftforge.net/en/latest/misc/updatechecker/
 #updateJSONURL="https://change.me.example.invalid/updates.json" #optional
 # A URL for the "homepage" for this mod, displayed in the mod UI
-displayURL="https://www.curseforge.com/minecraft/mc-mods/electricity" #optional
+displayURL="https://github.com/SimoneRecchia/electricity" #optional
 # A file name (in the root of the mod JAR) containing a logo for display
 logoFile="assets/${mod_id}/icon.png" #optional
 # A text field displayed in the mod UI
-#credits="" #optional
+credits="Originally created by dooji (https://github.com/dooji2/electricity). This is a fork adding Mekanism and ComputerCraft integration." #optional
 # A text field displayed in the mod UI
 authors="${mod_authors}" #optional
 # Display Test controls the display for your mod in the server connection screen
@@ -43,3 +43,22 @@ authors="${mod_authors}" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
 description='''${mod_description}'''
+
+# Optional integration: when Mekanism is present the Wind Turbine offers part of its
+# output as Joules, so Universal Cables can draw from it directly. Not mandatory, but
+# Mekanism has to load first for its energy capability to exist when we look it up.
+[[dependencies.${mod_id}]]
+    modId="mekanism"
+    mandatory=false
+    versionRange="[10.4,11)"
+    ordering="AFTER"
+    side="BOTH"
+
+# Optional integration: when CC:Tweaked is present the Wind Turbine becomes a
+# peripheral, readable directly or over a wired modem and network cable.
+[[dependencies.${mod_id}]]
+    modId="computercraft"
+    mandatory=false
+    versionRange="[1.109,2)"
+    ordering="AFTER"
+    side="BOTH"

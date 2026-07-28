@@ -12,6 +12,7 @@ import com.dooji.electricity.block.UtilityPoleBlockEntity;
 import com.dooji.electricity.block.WindTurbineBlock;
 import com.dooji.electricity.block.WindTurbineBlockEntity;
 import com.dooji.electricity.block.WorkbenchBlock;
+import com.dooji.electricity.compat.computercraft.ComputerCraftBridge;
 import com.dooji.electricity.item.ItemWire;
 import com.dooji.electricity.item.PowerWrenchItem;
 import com.dooji.electricity.item.TooltipBlockItem;
@@ -154,6 +155,8 @@ public class Electricity {
 		event.enqueueWork(() -> {
 			ElectricityNetworking.init();
 			ObjDefinitions.bootstrap();
+			// no-op without CC:Tweaked installed
+			ComputerCraftBridge.register();
 		});
 	}
 

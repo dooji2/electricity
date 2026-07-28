@@ -1,16 +1,24 @@
 package com.dooji.electricity.block;
 
+import com.dooji.electricity.api.power.IEnergyBudget;
+import com.dooji.electricity.api.power.RedstoneMode;
+import com.dooji.electricity.api.power.TurbineTelemetry;
 import com.dooji.electricity.client.TrackedBlockEntities;
 import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
+import com.dooji.electricity.compat.energy.EnergyBridge;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.ElectricityServerConfig;
 import com.dooji.electricity.main.registry.ObjBlockDefinition;
 import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.main.weather.GlobalWeatherManager;
 import com.dooji.electricity.main.weather.WeatherSnapshot;
+import com.dooji.electricity.power.TurbineTelemetrySimulator;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
+import java.util.List;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -27,10 +35,14 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.common.capabilities.Capability;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.energy.IEnergyStorage;
 import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
-public class WindTurbineBlockEntity extends BlockEntity {
+public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget {
 	private Vec3[] wirePositions;
 	private int[] insulatorIds;
 
@@ -45,17 +57,59 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	private float lastAlignedWindSpeed = 0.0f;
 	private float windDirection = 0.0f;
 	private double turbulence = 0.0;
-	private static final float CUTOFF_RESET_SPEED = 20.0f;
+	/**
+	 * Where a storm shutdown releases. Set at the storm onset rather than below it, so
+	 * the machine comes back through the derating ramp at 80% instead of slamming
+	 * straight to full output — the same strain on the drivetrain that derating exists
+	 * to avoid. 3 m/s of hysteresis against the 25 m/s shutdown is still ample.
+	 */
+	private static final float SHUTDOWN_RESET_SPEED = 22.0f;
 	private boolean cutOutActive = false;
 	private boolean yawInitialized = false;
 	private float yaw = 0.0f;
 	private float lastSentYaw = Float.NaN;
 	private long lastSyncTick = 0L;
-	private static final float CUT_IN_SPEED = 3.0f;
-	private static final float RATED_SPEED = 12.0f;
-	private static final float CUTOFF_SPEED = 22.0f;
+	public static final float CUT_IN_SPEED = 3.0f;
+	public static final float RATED_SPEED = 12.0f;
+	/**
+	 * Storm control begins here. Rather than tripping, the machine sheds output as the
+	 * wind keeps rising, which is what a real turbine does: coming off load in one step
+	 * from full power is a shock to the drivetrain and to the grid behind it.
+	 */
+	public static final float STORM_ONSET_SPEED = 22.0f;
+	/** Above this the machine gives up and brakes. */
+	public static final float SHUTDOWN_SPEED = 25.0f;
+	/** Fraction of rated output shed per m/s above the storm onset. */
+	private static final double STORM_DERATE_PER_MS = 0.2;
+	/** Output at rated wind speed, derived from the generation curve so the two cannot drift apart. */
+	public static final double RATED_POWER_KW = powerForWindSpeed(RATED_SPEED);
 	private static final float YAW_STEP = 0.25f;
 	private static final float YAW_DEADBAND = 7.5f;
+
+	// this tick's offer to other mods' energy systems, and how much of it they took.
+	// Nothing carries over between ticks, so neither value is persisted.
+	private double tickBudgetJoules = 0.0;
+	private double claimedJoules = 0.0;
+	private final LazyOptional<IEnergyStorage> forgeEnergy = LazyOptional.of(() -> EnergyBridge.forgeEnergyView(this));
+	private final LazyOptional<?> mekanismEnergy = EnergyBridge.createMekanismHandler(this);
+
+	// Telemetry is published as one finished snapshot per tick rather than read
+	// field by field, because ComputerCraft calls in from the computer thread: a
+	// reader would otherwise race the server thread and could mix values from two
+	// different ticks. Volatile makes the completed snapshot visible atomically.
+	private final TurbineTelemetrySimulator telemetrySimulator = new TurbineTelemetrySimulator();
+	private volatile TurbineTelemetry telemetry = TurbineTelemetry.EMPTY;
+	private double yawCableTwist = 0.0;
+	private boolean yawing = false;
+
+	// Control state. Volatile because a ComputerCraft program reads it from the
+	// computer thread; writes come back through the server thread, see the setters.
+	private volatile boolean stoppedByComputer = false;
+	private volatile RedstoneMode redstoneMode = RedstoneMode.DISABLED;
+	private volatile boolean redstonePowered = false;
+	private volatile double activePowerLimitKw = RATED_POWER_KW;
+	/** What the wind alone would have produced, before curtailment. */
+	private double uncappedPower = 0.0;
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -160,13 +214,21 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		return windDirection;
 	}
 
+	/**
+	 * What the wire network may carry away this tick: everything generated, minus
+	 * whatever another mod's cables already claimed. The subtraction is what stops
+	 * the same Joule being spent twice, because the wire network reads a generator
+	 * without ever debiting it.
+	 */
 	public double getGeneratedPower() {
 		updateGeneratedPower();
-		return generatedPower;
+		return Math.max(0.0, generatedPower - claimedJoules / EnergyBridge.JOULES_PER_KW);
 	}
 
 	public boolean isSurging() {
-		return turbulence >= 0.35 && lastEffectiveWindSpeed < CUTOFF_SPEED && !cutOutActive;
+		// still possible right through the storm-control band, since the machine is
+		// running there; only a real shutdown rules a surge out
+		return turbulence >= 0.35 && lastEffectiveWindSpeed < SHUTDOWN_SPEED && !isBraked();
 	}
 
 	public double getCurrentPower() {
@@ -179,15 +241,282 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 	private void updateGeneratedPower() {
 		float effectiveWindSpeed = Math.max(0.0f, lastAlignedWindSpeed);
-		if (cutOutActive || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= CUTOFF_SPEED) {
+		if (isBraked() || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= SHUTDOWN_SPEED) {
+			uncappedPower = 0.0;
 			generatedPower = 0.0;
 			return;
 		}
 
-		float capped = Math.min(effectiveWindSpeed, RATED_SPEED);
+		uncappedPower = powerForWindSpeed(effectiveWindSpeed) * stormDerating(effectiveWindSpeed);
+		generatedPower = Math.min(uncappedPower, Math.max(0.0, activePowerLimitKw));
+	}
+
+	/**
+	 * How much of its output the machine keeps in a storm, from 1.0 below the onset
+	 * down to 0 at the shutdown speed.
+	 *
+	 * A fifth of rated is shed per m/s, so the factor lands on 0.8, 0.6 and 0.4 at 22,
+	 * 23 and 24 m/s. The ramp is continuous rather than stepped at whole m/s: a
+	 * staircase would put three fresh discontinuities in the power curve, which is
+	 * exactly what derating exists to avoid.
+	 */
+	public static double stormDerating(double windSpeed) {
+		if (windSpeed < STORM_ONSET_SPEED) return 1.0;
+		if (windSpeed >= SHUTDOWN_SPEED) return 0.0;
+
+		return Mth.clamp(1.0 - STORM_DERATE_PER_MS * (windSpeed - STORM_ONSET_SPEED + 1.0), 0.0, 1.0);
+	}
+
+	// ---- control ----
+
+	/**
+	 * Whether the rotor is held stopped, for any reason: the machine protecting
+	 * itself in a gale, a command from a computer, or a redstone signal. Everything
+	 * that should not happen on a stopped turbine keys off this rather than off the
+	 * wind cut-out alone.
+	 */
+	public boolean isBraked() {
+		return cutOutActive || stoppedByComputer || !redstoneMode.allowsRunning(redstonePowered);
+	}
+
+	public boolean isRunning() {
+		return !isBraked();
+	}
+
+	public boolean isStoppedByComputer() {
+		return stoppedByComputer;
+	}
+
+	public boolean isStoppedByRedstone() {
+		return !redstoneMode.allowsRunning(redstonePowered);
+	}
+
+	public boolean isWindCutOut() {
+		return cutOutActive;
+	}
+
+	public RedstoneMode getRedstoneMode() {
+		return redstoneMode;
+	}
+
+	public double getActivePowerLimit() {
+		return activePowerLimitKw;
+	}
+
+	/**
+	 * Stops or releases the turbine. Must be called from the server thread: it marks
+	 * the block entity dirty and pushes the new state to clients so the rotor stops
+	 * on screen too.
+	 */
+	public void setStoppedByComputer(boolean stopped) {
+		if (stoppedByComputer == stopped) return;
+
+		stoppedByComputer = stopped;
+		onControlChanged();
+	}
+
+	public void setRedstoneMode(RedstoneMode mode) {
+		if (mode == null || redstoneMode == mode) return;
+
+		redstoneMode = mode;
+		onControlChanged();
+	}
+
+	/** Curtailment setpoint in kW, clamped to what the machine can actually produce. */
+	public void setActivePowerLimit(double limitKw) {
+		double clamped = Mth.clamp(limitKw, 0.0, RATED_POWER_KW);
+		if (activePowerLimitKw == clamped) return;
+
+		activePowerLimitKw = clamped;
+		onControlChanged();
+	}
+
+	private void onControlChanged() {
+		setChanged();
+		// pushed immediately rather than waiting for the periodic sync, so a stop
+		// command is visible on the rotor at once instead of up to half a second later
+		syncStateToClients();
+	}
+
+	private void pollRedstone() {
+		if (level == null || level.isClientSide()) return;
+
+		boolean powered = level.hasNeighborSignal(worldPosition);
+		if (powered == redstonePowered) return;
+
+		redstonePowered = powered;
+		// only matters visually when the mode actually reacts to redstone
+		if (redstoneMode != RedstoneMode.DISABLED) {
+			onControlChanged();
+		} else {
+			setChanged();
+		}
+	}
+
+	/**
+	 * The generation curve. Clamping at the rated speed is what gives the turbine
+	 * its power plateau in strong wind, which on a real machine is the blades
+	 * pitching out; the telemetry reports that pitch angle from the same clamp.
+	 */
+	private static double powerForWindSpeed(float windSpeed) {
+		float capped = Math.min(windSpeed, RATED_SPEED);
 		double normalized = Math.min(1.0, capped / 16.0f);
-		double energyFactor = normalized * normalized;
-		generatedPower = 140.0 * energyFactor;
+		return 140.0 * normalized * normalized;
+	}
+
+	/** Gross production before the output cap and before anything claims it, in Joules per tick. */
+	public double getGrossJoulesPerTick() {
+		return Math.max(0.0, generatedPower) * EnergyBridge.JOULES_PER_KW;
+	}
+
+	/**
+	 * The latest published snapshot. Safe to read from any thread; never null.
+	 */
+	public TurbineTelemetry getTelemetry() {
+		return telemetry;
+	}
+
+	private void updateTelemetry() {
+		if (level == null || level.isClientSide()) return;
+
+		// precipitation is checked at this position rather than globally, the same way
+		// GlobalWeatherManager samples it: it is not raining inside a desert or under
+		// a roof, and the thermometer should agree with what is actually overhead
+		boolean precipitating = level.isRainingAt(worldPosition.above());
+		boolean storming = level.isThundering() && precipitating;
+		// the machine is not giving everything it could: braked, pitching out above the
+		// rated wind, or held down by a curtailment setpoint
+		boolean powerLimited = isBraked() || lastAlignedWindSpeed > RATED_SPEED || uncappedPower > generatedPower;
+
+		telemetry = telemetrySimulator.sample(new TurbineTelemetrySimulator.Sample(
+				Math.max(0.0, generatedPower),
+				RATED_POWER_KW,
+				activePowerLimitKw,
+				powerLimited,
+				lastEffectiveWindSpeed,
+				lastAlignedWindSpeed,
+				windDirection,
+				getYaw(),
+				turbulence,
+				rotationSpeed1,
+				isBraked(),
+				cutOutActive,
+				stoppedByComputer,
+				isStoppedByRedstone(),
+				yawing,
+				ambientTemperature(precipitating, storming),
+				worldPosition.getY(),
+				precipitating,
+				storming,
+				level.getGameTime(),
+				Math.abs(worldPosition.hashCode() % 1024),
+				yawCableTwist
+		));
+	}
+
+	/**
+	 * Air temperature at the nacelle, in Celsius.
+	 *
+	 * Minecraft has no ambient temperature, so this is assembled from the things
+	 * that would actually drive one: the biome's climate, height, the day cycle and
+	 * what the sky is doing. The biome scale runs 0..2, mapped so a snowy biome
+	 * reads about -5C, plains 11C and a desert 35C.
+	 */
+	private double ambientTemperature(boolean precipitating, boolean storming) {
+		double celsius = level.getBiome(worldPosition).value().getBaseTemperature() * 20.0 - 5.0;
+
+		// the same height cooling vanilla applies to biome temperature above y=80,
+		// converted into this scale, so a mountaintop turbine reads colder than one
+		// on the plain below it exactly as the game would have it
+		celsius -= Math.max(0, worldPosition.getY() - 80) * 0.025;
+
+		// diurnal swing, peaking in the early afternoon and bottoming before dawn.
+		// Cloud cover flattens it, which is why an overcast night is milder than a
+		// clear one
+		double swing = 6.0;
+		if (storming) {
+			swing *= 0.25;
+		} else if (precipitating) {
+			swing *= 0.5;
+		}
+
+		double dayPhase = (level.getDayTime() % 24000L) / 24000.0;
+		celsius += Math.sin((dayPhase - 2000.0 / 24000.0) * 2.0 * Math.PI) * swing;
+
+		if (storming) {
+			celsius -= 6.0;
+		} else if (precipitating) {
+			celsius -= 3.0;
+		}
+
+		return celsius;
+	}
+
+	/**
+	 * Opens a fresh budget for the current tick. The cap only limits what other mods
+	 * can draw; the wire network still receives everything left over.
+	 */
+	private void refreshEnergyBudget() {
+		claimedJoules = 0.0;
+		double cap = getMaxJoulesPerTick();
+		tickBudgetJoules = cap <= 0.0 ? 0.0 : Math.min(Math.max(0.0, generatedPower) * EnergyBridge.JOULES_PER_KW, cap);
+	}
+
+	/**
+	 * Mirrors Mekanism's Wind Generator, which exposes energy on its front and
+	 * bottom rather than on every face: cables belong at the foot of the tower.
+	 */
+	private List<Direction> energyFaces() {
+		return List.of(Direction.DOWN, getBlockState().getValue(WindTurbineBlock.FACING).getOpposite());
+	}
+
+	private boolean isEnergyFace(@Nullable Direction side) {
+		if (side == null) return true;
+
+		return energyFaces().contains(side);
+	}
+
+	@Override
+	public double getAvailableJoules() {
+		if (level == null || level.isClientSide() || !ElectricityServerConfig.externalEnergyEnabled()) return 0.0;
+
+		return Math.max(0.0, tickBudgetJoules - claimedJoules);
+	}
+
+	@Override
+	public double getMaxJoulesPerTick() {
+		if (level == null || level.isClientSide() || !ElectricityServerConfig.externalEnergyEnabled()) return 0.0;
+
+		return ElectricityServerConfig.turbineMaxJoulesPerTick();
+	}
+
+	@Override
+	public double claimJoules(double joules, boolean simulate) {
+		if (!(joules > 0.0)) return 0.0;
+
+		double claimable = Math.min(joules, getAvailableJoules());
+		if (claimable <= 0.0) return 0.0;
+		if (!simulate) claimedJoules += claimable;
+
+		return claimable;
+	}
+
+	@Nonnull
+	@Override
+	public <T> LazyOptional<T> getCapability(@Nonnull Capability<T> cap, @Nullable Direction side) {
+		if (isEnergyFace(side)) {
+			if (cap == ForgeCapabilities.ENERGY) return forgeEnergy.cast();
+			if (EnergyBridge.isMekanismEnergyCapability(cap)) return mekanismEnergy.cast();
+		}
+
+		return super.getCapability(cap, side);
+	}
+
+	@Override
+	public void invalidateCaps() {
+		super.invalidateCaps();
+		forgeEnergy.invalidate();
+		mekanismEnergy.invalidate();
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
@@ -254,15 +583,25 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		float alignment = alignmentFactor();
 		lastAlignedWindSpeed = lastEffectiveWindSpeed * alignment;
 
-		if (lastEffectiveWindSpeed >= CUTOFF_SPEED) {
+		// the brake now waits for the shutdown speed: between the storm onset and there
+		// the machine stays on load, just derated
+		if (lastEffectiveWindSpeed >= SHUTDOWN_SPEED) {
 			cutOutActive = true;
-		} else if (cutOutActive && lastEffectiveWindSpeed <= CUTOFF_RESET_SPEED) {
+		} else if (cutOutActive && lastEffectiveWindSpeed <= SHUTDOWN_RESET_SPEED) {
 			cutOutActive = false;
 		}
 
-		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, cutOutActive);
+		pollRedstone();
+		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, isBraked());
 		updateGeneratedPower();
 
+		// push before the wire network runs. Block entities tick inside the level tick,
+		// while PowerNetwork.updatePowerNetwork() runs on ServerTickEvent END, so the
+		// residual reaches the wires in this same tick instead of a tick late.
+		refreshEnergyBudget();
+		EnergyBridge.emit(this, this, energyFaces());
+
+		updateTelemetry();
 		maybeSync();
 	}
 
@@ -299,6 +638,15 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 		windDirection = tag.getFloat("windDirection");
 		turbulence = tag.contains("turbulence") ? tag.getDouble("turbulence") : 0.0;
+		yawCableTwist = tag.getDouble("yawCableTwist");
+
+		stoppedByComputer = tag.getBoolean("stoppedByComputer");
+		redstonePowered = tag.getBoolean("redstonePowered");
+		RedstoneMode savedMode = RedstoneMode.byName(tag.getString("redstoneMode"));
+		redstoneMode = savedMode != null ? savedMode : RedstoneMode.DISABLED;
+		// an older turbine has no setpoint saved, so it defaults to uncurtailed rather
+		// than to a limit of zero, which would silently switch it off on load
+		activePowerLimitKw = tag.contains("activePowerLimitKw") ? tag.getDouble("activePowerLimitKw") : RATED_POWER_KW;
 
 		updateWirePositions();
 	}
@@ -346,6 +694,17 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		tag.putFloat("yaw", yaw);
 		tag.putFloat("windDirection", windDirection);
 		tag.putDouble("turbulence", turbulence);
+		// the one telemetry value that is real accumulated state rather than a
+		// reading, so it has to survive a reload; the simulated temperatures do not,
+		// they just warm up from ambient again
+		tag.putDouble("yawCableTwist", yawCableTwist);
+
+		// all four are written because getUpdateTag() routes through here: the client
+		// needs every input to isBraked() to decide whether to animate the rotor
+		tag.putBoolean("stoppedByComputer", stoppedByComputer);
+		tag.putBoolean("redstonePowered", redstonePowered);
+		tag.putString("redstoneMode", redstoneMode.name());
+		tag.putDouble("activePowerLimitKw", activePowerLimitKw);
 	}
 
 	@Override
@@ -431,7 +790,9 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 		float appliedSpeed1 = rotationSpeed1;
 		float appliedSpeed2 = rotationSpeed2;
-		if (!cutOutActive) {
+		// a braked rotor must not be spun up by the client's own guess. All the inputs
+		// to isBraked() are synced, so the client reaches the same conclusion.
+		if (!isBraked()) {
 			if (rotationSpeed1 == 0.0f && effectiveSpeed > 0.0f) {
 				appliedSpeed1 = Math.min(12.0f, effectiveSpeed * 0.6f);
 			}
@@ -454,11 +815,18 @@ public class WindTurbineBlockEntity extends BlockEntity {
 			yawInitialized = true;
 		}
 
+		yawing = false;
 		float target = windDirection;
 		float delta = Mth.wrapDegrees(target - yaw);
 		if (Math.abs(delta) <= YAW_DEADBAND) return;
 		float step = Mth.clamp(delta, -YAW_STEP, YAW_STEP);
 		yaw = Mth.wrapDegrees(yaw + step);
+		yawing = true;
+
+		// signed accumulation, so the twist tracks net rotation rather than total
+		// travel. The wind wanders both ways, so this random-walks around zero
+		// instead of growing without bound; the mod does not model an untwist cycle.
+		yawCableTwist += step;
 	}
 
 	private float alignmentFactor() {
