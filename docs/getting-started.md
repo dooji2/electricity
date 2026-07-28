@@ -104,7 +104,7 @@ Hovering a block shows the same power figures as a tooltip without opening anyth
 | Rated | 12 m/s | Full output, 78.75 kW; blades begin pitching out |
 | Storm onset | 22 m/s | Output derates instead of tripping |
 | Shutdown | 25 m/s | Brake on, blades feathered |
-| Re-arm | 20 m/s | Releases a storm shutdown |
+| Re-arm | 22 m/s | Releases a storm shutdown, back at 80% |
 
 A turbine also loses power when it is not pointed into the wind. It yaws to follow the
 wind but only corrects past a 7.5° deadband, so it normally sits slightly off and gives

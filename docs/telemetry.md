@@ -44,7 +44,7 @@ Mekanism's default 2.5 J per FE, so every part of the mod agrees on the scale.
 | `start()` | – | releases a `stop()`; does **not** override redstone or a wind cut-out |
 | `isStopped()` | boolean | stopped specifically by a computer command |
 | `isRunning()` | boolean | rotor turning and allowed to generate |
-| `isWindCutOut()` | boolean | the machine stopped itself; the wind exceeded 22 m/s |
+| `isWindCutOut()` | boolean | the machine braked itself; the raw wind reached 25 m/s |
 | `isStoppedByRedstone()` | boolean | the redstone mode and signal are holding it down |
 | `getRedstoneMode()` | string | `"DISABLED"`, `"HIGH"` or `"LOW"` |
 | `setRedstoneMode(mode)` | – | same names Mekanism uses; throws on anything else |
@@ -207,10 +207,11 @@ useful component.
 | Rated | 12 m/s | aligned | plateau at `v ≥ 12` | 78.750 kW, blades start pitching out |
 | Storm onset | 22 m/s | aligned | full output to `v < 22` | derates, stays on load |
 | Shutdown | 25 m/s | raw | brakes at `v ≥ 25` | brake on, blades feathered, latching |
-| Re-arm | 20 m/s | raw | releases at `v ≤ 20` | latch clears |
+| Re-arm | 22 m/s | raw | releases at `v ≤ 22` | latch clears, back at 80% |
 
 21.99 m/s still gives full output; 22.00 gives 80%. 24.99 still generates; 25.00 is
-braked. A latched shutdown clears only once the raw wind is back at or below 20.
+braked. A latched shutdown clears once the raw wind is back at or below 22, so the
+machine restarts into the derating ramp at 80% rather than jumping to full output.
 
 Because the shutdown reads raw wind while the curve is indexed on aligned wind, a
 badly yawed turbine can brake while its aligned speed is only 15 m/s or so. The
@@ -247,9 +248,9 @@ Curtailment applies **after** the derating, as a floor-taking minimum: at 22 m/s
 ### Values
 
 At zero yaw error, which is how a power curve is conventionally specified.
-`descending` is the branch after a latched shutdown: the latch clears only at 20, so
-coming down from a storm the whole 20–25 band reads zero and the derating band is
-never traversed downward.
+`descending` is the branch after a latched shutdown: the latch clears at 22, so coming
+down from a storm the 22.5–25 band reads zero and the machine rejoins at 22 with the
+derating already applied.
 
 | v (m/s) | kW | % rated | derate | descending |
 |---|---|---|---|---|
@@ -272,14 +273,13 @@ never traversed downward.
 | 10.5 | 60.293 | 76.56% | 1.00 | 60.293 |
 | 11.0 | 66.172 | 84.03% | 1.00 | 66.172 |
 | 11.5 | 72.324 | 91.84% | 1.00 | 72.324 |
-| 12.0 – 20.0 | 78.750 | 100% | 1.00 | 78.750 |
-| 20.5 – 21.5 | 78.750 | 100% | 1.00 | **0** |
-| 22.0 | 63.000 | 80% | 0.80 | 0 |
-| 22.5 | 55.125 | 70% | 0.70 | 0 |
-| 23.0 | 47.250 | 60% | 0.60 | 0 |
-| 23.5 | 39.375 | 50% | 0.50 | 0 |
-| 24.0 | 31.500 | 40% | 0.40 | 0 |
-| 24.5 | 23.625 | 30% | 0.30 | 0 |
+| 12.0 – 21.5 | 78.750 | 100% | 1.00 | 78.750 |
+| 22.0 | 63.000 | 80% | 0.80 | 63.000 |
+| 22.5 | 55.125 | 70% | 0.70 | **0** |
+| 23.0 | 47.250 | 60% | 0.60 | **0** |
+| 23.5 | 39.375 | 50% | 0.50 | **0** |
+| 24.0 | 31.500 | 40% | 0.40 | **0** |
+| 24.5 | 23.625 | 30% | 0.30 | **0** |
 | 25.0 and above | 0 | 0% | 0.00 | 0 |
 
 Half of rated falls at 8.5 m/s. Telemetry rounds to two decimals, so measured values
@@ -331,10 +331,10 @@ wind_ms,power_kw,percent_rated,derating,power_kw_descending
 19.0,78.750,100.00,1.00,78.750
 19.5,78.750,100.00,1.00,78.750
 20.0,78.750,100.00,1.00,78.750
-20.5,78.750,100.00,1.00,0.000
-21.0,78.750,100.00,1.00,0.000
-21.5,78.750,100.00,1.00,0.000
-22.0,63.000,80.00,0.80,0.000
+20.5,78.750,100.00,1.00,78.750
+21.0,78.750,100.00,1.00,78.750
+21.5,78.750,100.00,1.00,78.750
+22.0,63.000,80.00,0.80,63.000
 22.5,55.125,70.00,0.70,0.000
 23.0,47.250,60.00,0.60,0.000
 23.5,39.375,50.00,0.50,0.000

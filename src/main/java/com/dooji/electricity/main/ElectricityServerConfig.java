@@ -17,9 +17,12 @@ public final class ElectricityServerConfig {
 		EXTERNAL_ENERGY_ENABLED = builder.comment("Let generators feed the energy systems of other mods (Mekanism Joules and Forge Energy) directly").define("externalEnergyEnabled", true);
 		TURBINE_MAX_JOULES_PER_TICK = builder.comment(
 				"Cap on the Joules per tick a Wind Turbine will hand to another mod's cables.",
-				"At 125 J per kW an uncapped turbine peaks near 9844 J/t, about 20x a Mekanism Wind Generator,",
-				"so this is capped to Mekanism's own maximum by default. Whatever is not taken stays on the wire network."
-		).defineInRange("turbineMaxJoulesPerTick", 480.0, 0.0, 1.0e9);
+				"At 125 J per kW an uncapped turbine peaks near 9844 J/t, about 20x a Mekanism Wind Generator.",
+				"The default of 2000 is roughly 4x that Generator, which suits a machine costing a workbench,",
+				"circuit boards, a CPU and a motor core against a single block, while staying under the 5000 J/t",
+				"the Power Box can already push so the Power Box remains the primary bridge.",
+				"Whatever is not taken stays on the wire network."
+		).defineInRange("turbineMaxJoulesPerTick", 2000.0, 0.0, 1.0e9);
 		builder.pop();
 		SERVER_SPEC_INTERNAL = builder.build();
 	}

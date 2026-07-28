@@ -145,11 +145,13 @@ folder, not in `config/`.
 |---|---|---|
 | `powerBoxRadius` | 5 | Radius of the Power Box's field, in blocks |
 | `externalEnergyEnabled` | true | Let generators feed other mods' energy systems |
-| `turbineMaxJoulesPerTick` | 480.0 | Cap on what a turbine hands to foreign cables |
+| `turbineMaxJoulesPerTick` | 2000.0 | Cap on what a turbine hands to foreign cables |
 
-The 480 J/t default matches Mekanism's own Wind Generator maximum, which means a turbine
-gives Mekanism about 5% of its peak. Raise it if you want turbines to be a serious
-supply for a Mekanism base.
+The 2000 J/t default is about 4× Mekanism's own Wind Generator, which suits a machine
+costing a workbench, circuit boards, a CPU and a motor core against a single block. It
+gives Mekanism **16 kW** and leaves 62.75 kW on the wires at peak wind, and stays under
+the 5000 J/t the Power Box can already push, so the Power Box remains the primary bridge.
+Uncapped a turbine would reach 9844 J/t, roughly 20× that Generator.
 
 ## Building from source
 

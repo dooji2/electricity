@@ -56,15 +56,18 @@ same tick rather than one tick late.
 
 ### The output cap
 
-`turbineMaxJoulesPerTick`, default **480.0**, limits only what **foreign cables** may
+`turbineMaxJoulesPerTick`, default **2000.0**, limits only what **foreign cables** may
 draw. The wire network still receives everything left over.
 
-480 J/t is Mekanism's own Wind Generator maximum. Without a cap a turbine peaks near
-9844 J/t, roughly 20× that, so the default keeps it in Mekanism's balance band — at the
-cost of giving Mekanism only about 5% of the turbine's peak.
+Without a cap a turbine reaches 9844 J/t, roughly 20× Mekanism's own Wind Generator
+maximum of 480 J/t. The default sits at about 4× that Generator, which suits a machine
+costing a workbench, circuit boards, a CPU and a motor core against a single block, and
+stays under the 5000 J/t the Power Box can already push — so the Power Box remains the
+primary bridge and the turbine's faces are a secondary tap.
 
-Raise it in `<world>/serverconfig/Electricity/server.toml` if you want turbines to be a
-real supply. At 2000 J/t a turbine gives Mekanism 16 kW and keeps 62.75 kW on the wires.
+At the default, a turbine at peak wind gives Mekanism **16 kW** and keeps **62.75 kW** on
+the wires. Change it in `<world>/serverconfig/Electricity/server.toml`; existing worlds
+keep whatever value they already have saved, since the default only applies to new ones.
 
 ### Mekanism-compatible methods
 

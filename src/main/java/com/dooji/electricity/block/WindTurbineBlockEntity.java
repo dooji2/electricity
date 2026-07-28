@@ -57,7 +57,13 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private float lastAlignedWindSpeed = 0.0f;
 	private float windDirection = 0.0f;
 	private double turbulence = 0.0;
-	private static final float CUTOFF_RESET_SPEED = 20.0f;
+	/**
+	 * Where a storm shutdown releases. Set at the storm onset rather than below it, so
+	 * the machine comes back through the derating ramp at 80% instead of slamming
+	 * straight to full output — the same strain on the drivetrain that derating exists
+	 * to avoid. 3 m/s of hysteresis against the 25 m/s shutdown is still ample.
+	 */
+	private static final float SHUTDOWN_RESET_SPEED = 22.0f;
 	private boolean cutOutActive = false;
 	private boolean yawInitialized = false;
 	private float yaw = 0.0f;
@@ -581,7 +587,7 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		// the machine stays on load, just derated
 		if (lastEffectiveWindSpeed >= SHUTDOWN_SPEED) {
 			cutOutActive = true;
-		} else if (cutOutActive && lastEffectiveWindSpeed <= CUTOFF_RESET_SPEED) {
+		} else if (cutOutActive && lastEffectiveWindSpeed <= SHUTDOWN_RESET_SPEED) {
 			cutOutActive = false;
 		}
 
