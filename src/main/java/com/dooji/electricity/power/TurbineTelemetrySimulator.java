@@ -124,12 +124,15 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_2, pitch + wobble(s, 97.0, 0.25) - 0.1);
 		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_3, pitch + wobble(s, 101.0, 0.25) + 0.15);
 
-		// pressure falls with altitude and drops ahead of bad weather
-		double pressure = SEA_LEVEL_PRESSURE - (s.blockY() - 64) * 0.12;
+		// pressure falls with altitude, and with the weather. The wind term is the one
+		// that matters for coherence: wind exists because of a pressure gradient, so a
+		// gale reading 1013 hPa would be nonsense sitting next to a 22 m/s wind speed.
+		// At the cut-out wind this lands near 990 hPa, which is a real storm low.
+		double pressure = SEA_LEVEL_PRESSURE - (s.blockY() - 64) * 0.12 - s.windSpeed() * 0.9;
 		if (s.thundering()) {
-			pressure -= 12.0;
+			pressure -= 8.0;
 		} else if (s.raining()) {
-			pressure -= 6.0;
+			pressure -= 4.0;
 		}
 		out.put(TurbineTelemetry.AIR_PRESSURE, pressure + wobble(s, 1201.0, 0.6));
 
@@ -142,9 +145,14 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.GEN_BEAR_TEMP_D_END, lag(TurbineTelemetry.GEN_BEAR_TEMP_D_END, ambient + 24.0 + 47.0 * load, ambient));
 		out.put(TurbineTelemetry.MAIN_BEAR_TEMP, lag(TurbineTelemetry.MAIN_BEAR_TEMP, ambient + 15.0 + 30.0 * load, ambient));
 
-		// stator windings are the hottest thing in the nacelle and scale with the
-		// square of current, not linearly with power
-		double copperLoss = load * load;
+		// stator windings are the hottest thing in the nacelle, and they heat with the
+		// square of current rather than with power. Current follows apparent power, so
+		// taking the ratio there instead of from active power matters: at part load the
+		// power factor is worse, so the machine carries more current than its kW
+		// suggest and runs correspondingly hotter
+		double ratedApparent = rated / 0.98;
+		double copperLoss = Mth.clamp(apparent / ratedApparent, 0.0, 1.0);
+		copperLoss *= copperLoss;
 		out.put(TurbineTelemetry.GENERATOR_L1_TEMP, lag(TurbineTelemetry.GENERATOR_L1_TEMP, ambient + 30.0 + 78.0 * copperLoss, ambient));
 		out.put(TurbineTelemetry.GENERATOR_L2_TEMP, lag(TurbineTelemetry.GENERATOR_L2_TEMP, ambient + 30.0 + 80.0 * copperLoss, ambient));
 		out.put(TurbineTelemetry.GENERATOR_L3_TEMP, lag(TurbineTelemetry.GENERATOR_L3_TEMP, ambient + 30.0 + 76.0 * copperLoss, ambient));
@@ -192,7 +200,11 @@ public final class TurbineTelemetrySimulator {
 	 * clamping wind speed to the rated value.
 	 */
 	private static double bladePitch(Sample s) {
-		if (s.cutOut() || s.alignedWindSpeed() < WindTurbineBlockEntity.CUT_IN_SPEED) return 90.0;
+		// feathered only on a real shutdown. Below the cut-in speed the rotor is still
+		// freewheeling, because updateRotorSpeeds only drives it to a stop on cut-out,
+		// and a feathered rotor does not turn: reporting 90 degrees there would
+		// contradict the rotor speed sitting right next to it in the same snapshot
+		if (s.cutOut()) return 90.0;
 		if (s.alignedWindSpeed() <= WindTurbineBlockEntity.RATED_SPEED) return 0.0;
 
 		double span = WindTurbineBlockEntity.CUTOFF_SPEED - WindTurbineBlockEntity.RATED_SPEED;

@@ -248,9 +248,11 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private void updateTelemetry() {
 		if (level == null || level.isClientSide()) return;
 
-		// Minecraft's biome temperature is a 0..2 scale, so map it onto something a
-		// thermometer would show: snowy reads about -5C, plains 11C, desert 35C
-		double ambientTempC = level.getBiome(worldPosition).value().getBaseTemperature() * 20.0 - 5.0;
+		// precipitation is checked at this position rather than globally, the same way
+		// GlobalWeatherManager samples it: it is not raining inside a desert or under
+		// a roof, and the thermometer should agree with what is actually overhead
+		boolean precipitating = level.isRainingAt(worldPosition.above());
+		boolean storming = level.isThundering() && precipitating;
 		boolean powerLimited = cutOutActive || lastAlignedWindSpeed > RATED_SPEED;
 
 		telemetry = telemetrySimulator.sample(new TurbineTelemetrySimulator.Sample(
@@ -266,14 +268,52 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 				rotationSpeed1,
 				cutOutActive,
 				yawing,
-				ambientTempC,
+				ambientTemperature(precipitating, storming),
 				worldPosition.getY(),
-				level.isRaining(),
-				level.isThundering(),
+				precipitating,
+				storming,
 				level.getGameTime(),
 				Math.abs(worldPosition.hashCode() % 1024),
 				yawCableTwist
 		));
+	}
+
+	/**
+	 * Air temperature at the nacelle, in Celsius.
+	 *
+	 * Minecraft has no ambient temperature, so this is assembled from the things
+	 * that would actually drive one: the biome's climate, height, the day cycle and
+	 * what the sky is doing. The biome scale runs 0..2, mapped so a snowy biome
+	 * reads about -5C, plains 11C and a desert 35C.
+	 */
+	private double ambientTemperature(boolean precipitating, boolean storming) {
+		double celsius = level.getBiome(worldPosition).value().getBaseTemperature() * 20.0 - 5.0;
+
+		// the same height cooling vanilla applies to biome temperature above y=80,
+		// converted into this scale, so a mountaintop turbine reads colder than one
+		// on the plain below it exactly as the game would have it
+		celsius -= Math.max(0, worldPosition.getY() - 80) * 0.025;
+
+		// diurnal swing, peaking in the early afternoon and bottoming before dawn.
+		// Cloud cover flattens it, which is why an overcast night is milder than a
+		// clear one
+		double swing = 6.0;
+		if (storming) {
+			swing *= 0.25;
+		} else if (precipitating) {
+			swing *= 0.5;
+		}
+
+		double dayPhase = (level.getDayTime() % 24000L) / 24000.0;
+		celsius += Math.sin((dayPhase - 2000.0 / 24000.0) * 2.0 * Math.PI) * swing;
+
+		if (storming) {
+			celsius -= 6.0;
+		} else if (precipitating) {
+			celsius -= 3.0;
+		}
+
+		return celsius;
 	}
 
 	/**
