@@ -1,5 +1,6 @@
 >Notice
-I had added new blocks & replaced the (bad) models in the current mod, unfortunately my computer broke so I temporarily don't have access to the files.
+
+>I had added new blocks & replaced the (bad) models in the current mod, unfortunately my computer broke so I temporarily don't have access to the files.
 
 **Electricity** is a Minecraft mod about simulating power networks. It adds utility poles, wind turbines, power boxes, cabins, lamps and a wire system.
 
