@@ -1,16 +1,21 @@
 package com.dooji.electricity.block;
 
+import com.dooji.electricity.api.power.IEnergyBudget;
 import com.dooji.electricity.client.TrackedBlockEntities;
 import com.dooji.electricity.client.render.obj.ObjBoundingBoxRegistry;
 import com.dooji.electricity.client.wire.InsulatorLookup;
 import com.dooji.electricity.client.wire.WireManagerClient;
+import com.dooji.electricity.compat.energy.EnergyBridge;
 import com.dooji.electricity.main.Electricity;
+import com.dooji.electricity.main.ElectricityServerConfig;
 import com.dooji.electricity.main.registry.ObjBlockDefinition;
 import com.dooji.electricity.main.registry.ObjDefinitions;
 import com.dooji.electricity.main.weather.GlobalWeatherManager;
 import com.dooji.electricity.main.weather.WeatherSnapshot;
 import com.dooji.electricity.wire.InsulatorIdRegistry;
+import java.util.List;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -27,10 +32,14 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.common.capabilities.Capability;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.energy.IEnergyStorage;
 import net.minecraftforge.fml.DistExecutor;
 import org.joml.Vector3f;
 
-public class WindTurbineBlockEntity extends BlockEntity {
+public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget {
 	private Vec3[] wirePositions;
 	private int[] insulatorIds;
 
@@ -56,6 +65,13 @@ public class WindTurbineBlockEntity extends BlockEntity {
 	private static final float CUTOFF_SPEED = 22.0f;
 	private static final float YAW_STEP = 0.25f;
 	private static final float YAW_DEADBAND = 7.5f;
+
+	// this tick's offer to other mods' energy systems, and how much of it they took.
+	// Nothing carries over between ticks, so neither value is persisted.
+	private double tickBudgetJoules = 0.0;
+	private double claimedJoules = 0.0;
+	private final LazyOptional<IEnergyStorage> forgeEnergy = LazyOptional.of(() -> EnergyBridge.forgeEnergyView(this));
+	private final LazyOptional<?> mekanismEnergy = EnergyBridge.createMekanismHandler(this);
 
 	public WindTurbineBlockEntity(BlockPos pos, BlockState state) {
 		super(getBlockEntityType(), pos, state);
@@ -160,9 +176,15 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		return windDirection;
 	}
 
+	/**
+	 * What the wire network may carry away this tick: everything generated, minus
+	 * whatever another mod's cables already claimed. The subtraction is what stops
+	 * the same Joule being spent twice, because the wire network reads a generator
+	 * without ever debiting it.
+	 */
 	public double getGeneratedPower() {
 		updateGeneratedPower();
-		return generatedPower;
+		return Math.max(0.0, generatedPower - claimedJoules / EnergyBridge.JOULES_PER_KW);
 	}
 
 	public boolean isSurging() {
@@ -188,6 +210,73 @@ public class WindTurbineBlockEntity extends BlockEntity {
 		double normalized = Math.min(1.0, capped / 16.0f);
 		double energyFactor = normalized * normalized;
 		generatedPower = 140.0 * energyFactor;
+	}
+
+	/**
+	 * Opens a fresh budget for the current tick. The cap only limits what other mods
+	 * can draw; the wire network still receives everything left over.
+	 */
+	private void refreshEnergyBudget() {
+		claimedJoules = 0.0;
+		double cap = getMaxJoulesPerTick();
+		tickBudgetJoules = cap <= 0.0 ? 0.0 : Math.min(Math.max(0.0, generatedPower) * EnergyBridge.JOULES_PER_KW, cap);
+	}
+
+	/**
+	 * Mirrors Mekanism's Wind Generator, which exposes energy on its front and
+	 * bottom rather than on every face: cables belong at the foot of the tower.
+	 */
+	private List<Direction> energyFaces() {
+		return List.of(Direction.DOWN, getBlockState().getValue(WindTurbineBlock.FACING).getOpposite());
+	}
+
+	private boolean isEnergyFace(@Nullable Direction side) {
+		if (side == null) return true;
+
+		return energyFaces().contains(side);
+	}
+
+	@Override
+	public double getAvailableJoules() {
+		if (level == null || level.isClientSide() || !ElectricityServerConfig.externalEnergyEnabled()) return 0.0;
+
+		return Math.max(0.0, tickBudgetJoules - claimedJoules);
+	}
+
+	@Override
+	public double getMaxJoulesPerTick() {
+		if (level == null || level.isClientSide() || !ElectricityServerConfig.externalEnergyEnabled()) return 0.0;
+
+		return ElectricityServerConfig.turbineMaxJoulesPerTick();
+	}
+
+	@Override
+	public double claimJoules(double joules, boolean simulate) {
+		if (!(joules > 0.0)) return 0.0;
+
+		double claimable = Math.min(joules, getAvailableJoules());
+		if (claimable <= 0.0) return 0.0;
+		if (!simulate) claimedJoules += claimable;
+
+		return claimable;
+	}
+
+	@Nonnull
+	@Override
+	public <T> LazyOptional<T> getCapability(@Nonnull Capability<T> cap, @Nullable Direction side) {
+		if (isEnergyFace(side)) {
+			if (cap == ForgeCapabilities.ENERGY) return forgeEnergy.cast();
+			if (EnergyBridge.isMekanismEnergyCapability(cap)) return mekanismEnergy.cast();
+		}
+
+		return super.getCapability(cap, side);
+	}
+
+	@Override
+	public void invalidateCaps() {
+		super.invalidateCaps();
+		forgeEnergy.invalidate();
+		mekanismEnergy.invalidate();
 	}
 
 	public Vec3 calculateOrientedInsulatorCenter(int index) {
@@ -262,6 +351,12 @@ public class WindTurbineBlockEntity extends BlockEntity {
 
 		updateRotorSpeeds(lastAlignedWindSpeed, turbulence, cutOutActive);
 		updateGeneratedPower();
+
+		// push before the wire network runs. Block entities tick inside the level tick,
+		// while PowerNetwork.updatePowerNetwork() runs on ServerTickEvent END, so the
+		// residual reaches the wires in this same tick instead of a tick late.
+		refreshEnergyBudget();
+		EnergyBridge.emit(this, this, energyFaces());
 
 		maybeSync();
 	}

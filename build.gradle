@@ -114,6 +114,15 @@ repositories {
     // Put repositories for dependencies here
     // ForgeGradle automatically adds the Forge maven and Maven Central for you
 
+    // Mekanism publishes its API here for third-party integrations
+    maven {
+        name = 'ModMaven'
+        url = 'https://modmaven.dev/'
+        content {
+            includeGroup 'mekanism'
+        }
+    }
+
     // If you have mod jar dependencies in ./libs, you can declare them as a repository like so.
     // See https://docs.gradle.org/current/userguide/declaring_repositories.html#sub:flat_dir_resolver
     // flatDir {
@@ -128,6 +137,14 @@ dependencies {
     // If the group id is "net.minecraft" and the artifact id is one of ["client", "server", "joined"],
     // then special handling is done to allow a setup of a vanilla dependency without the use of an external repository.
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // Optional Mekanism integration. compileOnly, so the mod still builds and runs
+    // without Mekanism installed; everything that touches mekanism.* is confined to
+    // com.dooji.electricity.compat.mekanism and guarded by a ModList check.
+    compileOnly "mekanism:Mekanism:${mekanism_version}:api"
+    // Present only so runClient/runServer can exercise the integration
+    runtimeOnly fg.deobf("mekanism:Mekanism:${mekanism_version}")
+    runtimeOnly fg.deobf("mekanism:Mekanism:${mekanism_version}:generators")
 
     // Example mod dependency with JEI - using fg.deobf() ensures the dependency is remapped to your development mappings
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime

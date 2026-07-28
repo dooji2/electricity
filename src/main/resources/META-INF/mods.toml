@@ -43,3 +43,13 @@ authors="${mod_authors}" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
 description='''${mod_description}'''
+
+# Optional integration: when Mekanism is present the Wind Turbine offers part of its
+# output as Joules, so Universal Cables can draw from it directly. Not mandatory, but
+# Mekanism has to load first for its energy capability to exist when we look it up.
+[[dependencies.${mod_id}]]
+    modId="mekanism"
+    mandatory=false
+    versionRange="[10.4,11)"
+    ordering="AFTER"
+    side="BOTH"
