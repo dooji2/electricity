@@ -65,7 +65,16 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	private long lastSyncTick = 0L;
 	public static final float CUT_IN_SPEED = 3.0f;
 	public static final float RATED_SPEED = 12.0f;
-	public static final float CUTOFF_SPEED = 22.0f;
+	/**
+	 * Storm control begins here. Rather than tripping, the machine sheds output as the
+	 * wind keeps rising, which is what a real turbine does: coming off load in one step
+	 * from full power is a shock to the drivetrain and to the grid behind it.
+	 */
+	public static final float STORM_ONSET_SPEED = 22.0f;
+	/** Above this the machine gives up and brakes. */
+	public static final float SHUTDOWN_SPEED = 25.0f;
+	/** Fraction of rated output shed per m/s above the storm onset. */
+	private static final double STORM_DERATE_PER_MS = 0.2;
 	/** Output at rated wind speed, derived from the generation curve so the two cannot drift apart. */
 	public static final double RATED_POWER_KW = powerForWindSpeed(RATED_SPEED);
 	private static final float YAW_STEP = 0.25f;
@@ -211,7 +220,9 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 	}
 
 	public boolean isSurging() {
-		return turbulence >= 0.35 && lastEffectiveWindSpeed < CUTOFF_SPEED && !isBraked();
+		// still possible right through the storm-control band, since the machine is
+		// running there; only a real shutdown rules a surge out
+		return turbulence >= 0.35 && lastEffectiveWindSpeed < SHUTDOWN_SPEED && !isBraked();
 	}
 
 	public double getCurrentPower() {
@@ -224,14 +235,30 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 
 	private void updateGeneratedPower() {
 		float effectiveWindSpeed = Math.max(0.0f, lastAlignedWindSpeed);
-		if (isBraked() || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= CUTOFF_SPEED) {
+		if (isBraked() || effectiveWindSpeed < CUT_IN_SPEED || effectiveWindSpeed >= SHUTDOWN_SPEED) {
 			uncappedPower = 0.0;
 			generatedPower = 0.0;
 			return;
 		}
 
-		uncappedPower = powerForWindSpeed(effectiveWindSpeed);
+		uncappedPower = powerForWindSpeed(effectiveWindSpeed) * stormDerating(effectiveWindSpeed);
 		generatedPower = Math.min(uncappedPower, Math.max(0.0, activePowerLimitKw));
+	}
+
+	/**
+	 * How much of its output the machine keeps in a storm, from 1.0 below the onset
+	 * down to 0 at the shutdown speed.
+	 *
+	 * A fifth of rated is shed per m/s, so the factor lands on 0.8, 0.6 and 0.4 at 22,
+	 * 23 and 24 m/s. The ramp is continuous rather than stepped at whole m/s: a
+	 * staircase would put three fresh discontinuities in the power curve, which is
+	 * exactly what derating exists to avoid.
+	 */
+	public static double stormDerating(double windSpeed) {
+		if (windSpeed < STORM_ONSET_SPEED) return 1.0;
+		if (windSpeed >= SHUTDOWN_SPEED) return 0.0;
+
+		return Mth.clamp(1.0 - STORM_DERATE_PER_MS * (windSpeed - STORM_ONSET_SPEED + 1.0), 0.0, 1.0);
 	}
 
 	// ---- control ----
@@ -550,7 +577,9 @@ public class WindTurbineBlockEntity extends BlockEntity implements IEnergyBudget
 		float alignment = alignmentFactor();
 		lastAlignedWindSpeed = lastEffectiveWindSpeed * alignment;
 
-		if (lastEffectiveWindSpeed >= CUTOFF_SPEED) {
+		// the brake now waits for the shutdown speed: between the storm onset and there
+		// the machine stays on load, just derated
+		if (lastEffectiveWindSpeed >= SHUTDOWN_SPEED) {
 			cutOutActive = true;
 		} else if (cutOutActive && lastEffectiveWindSpeed <= CUTOFF_RESET_SPEED) {
 			cutOutActive = false;

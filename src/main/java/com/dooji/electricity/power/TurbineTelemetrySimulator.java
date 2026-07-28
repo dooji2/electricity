@@ -30,8 +30,10 @@ public final class TurbineTelemetrySimulator {
 	private static final double SEA_LEVEL_PRESSURE = 1013.25;
 	/** Reaches 63% of a step in roughly 25 seconds. Slow enough to read as thermal mass. */
 	private static final double THERMAL_LAG = 0.002;
-	/** Degrees of blade pitch at the cut-out end of the regulating range. */
+	/** Degrees of blade pitch at the top of the normal regulating range. */
 	private static final double MAX_REGULATING_PITCH = 25.0;
+	/** Degrees reached at the shutdown speed, on the way to full feather. */
+	private static final double MAX_STORM_PITCH = 60.0;
 
 	private final Map<String, Double> thermal = new HashMap<>();
 
@@ -225,12 +227,26 @@ public final class TurbineTelemetrySimulator {
 		// and a feathered rotor does not turn: reporting 90 degrees there would
 		// contradict the rotor speed sitting right next to it in the same snapshot
 		if (s.braked()) return 90.0;
-		if (s.alignedWindSpeed() <= WindTurbineBlockEntity.RATED_SPEED) return 0.0;
 
-		double span = WindTurbineBlockEntity.CUTOFF_SPEED - WindTurbineBlockEntity.RATED_SPEED;
-		if (span <= 0.0) return 0.0;
+		double wind = s.alignedWindSpeed();
+		if (wind <= WindTurbineBlockEntity.RATED_SPEED) return 0.0;
 
-		return Mth.clamp((s.alignedWindSpeed() - WindTurbineBlockEntity.RATED_SPEED) / span, 0.0, 1.0) * MAX_REGULATING_PITCH;
+		// between rated and the storm onset the blades pitch out just enough to hold the
+		// plateau
+		double regulatingSpan = WindTurbineBlockEntity.STORM_ONSET_SPEED - WindTurbineBlockEntity.RATED_SPEED;
+		if (wind < WindTurbineBlockEntity.STORM_ONSET_SPEED) {
+			if (regulatingSpan <= 0.0) return 0.0;
+
+			return Mth.clamp((wind - WindTurbineBlockEntity.RATED_SPEED) / regulatingSpan, 0.0, 1.0) * MAX_REGULATING_PITCH;
+		}
+
+		// past the onset they keep going, well past the regulating range: pitching out is
+		// how storm control sheds the power, so the angle has to track the derating
+		double stormSpan = WindTurbineBlockEntity.SHUTDOWN_SPEED - WindTurbineBlockEntity.STORM_ONSET_SPEED;
+		if (stormSpan <= 0.0) return MAX_STORM_PITCH;
+
+		double into = Mth.clamp((wind - WindTurbineBlockEntity.STORM_ONSET_SPEED) / stormSpan, 0.0, 1.0);
+		return MAX_REGULATING_PITCH + into * (MAX_STORM_PITCH - MAX_REGULATING_PITCH);
 	}
 
 	/** Any heading onto a 0..360 compass, whichever wrapping convention it arrived with. */

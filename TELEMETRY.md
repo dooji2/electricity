@@ -87,7 +87,7 @@ capitalised tag: `getWindSpeed()`, `getGearBoxOilTemp()`, `getVibYDirection()`.
 | `windDir` | ° | 0 – 360 | wind field direction |
 | `nacelleDir` | ° | 0 – 360 | actual yaw; follows `windDir` at 0.25°/tick past a 7.5° deadband |
 | `rotorRpm` | rpm | 0 – 40 | rotor speed |
-| `activePower` | kW | 0 – 78.75 | zero below 3 m/s, plateau from 12, zero above 22 |
+| `activePower` | kW | 0 – 78.75 | see the power curve below |
 | `activePowerLimit` | kW | 0 – 78.75 | curtailment setpoint |
 | `powerLimitationActive` | boolean | – | braked, pitching out, or curtailed |
 | `running` | boolean | – | rotor turning and generating |
@@ -109,7 +109,7 @@ capitalised tag: `getWindSpeed()`, `getGearBoxOilTemp()`, `getVibYDirection()`.
 | `f` | Hz | 49.96 – 50.04 | 50 nominal |
 | `v12` `v23` `v31` | V | 679 – 692 | 690 nominal, −1.2% at full load, phase imbalance |
 | `i1` `i2` `i3` | A | 0 – 68.5 | `S / (√3 · V)` |
-| `bladePitchAngle` | ° | 0 – 90 | 0 up to 12 m/s, ramps to 25 by 22, 90 when braked |
+| `bladePitchAngle` | ° | 0 – 90 | 0 to 12 m/s, 25° by 22, 60° by 25, 90° braked |
 | `bladePitchAngle1..3` | ° | 0 – 90 | collective ± 0.25, clamped to the mechanical travel |
 | `airPressure` | hPa | 951 – 1029 | falls with height, wind and weather |
 
@@ -154,6 +154,98 @@ copper loss follows current; everything else scales linearly with load.
 | `vibZDirection` | mm/s | 0.20 – 3.66 | `0.3 + 1.5 × load + 2.0 × turbulence` |
 
 All readings are rounded to two decimals.
+
+---
+
+## Power curve
+
+Four thresholds, and they do not all read the same wind speed. Cut-in and the rise
+are indexed on the **aligned** wind — the component the rotor actually sees, which
+is `windSpeed × cos³(windDir − nacelleDir)`. The storm shutdown latch reads the
+**raw** wind instead, because a machine protects itself from the wind that hits it,
+not from the useful component.
+
+| Threshold | Speed | Reads | Behaviour |
+|---|---|---|---|
+| Cut-in | 3 m/s | aligned | inclusive; steps straight to 4.92 kW |
+| Rated | 12 m/s | aligned | plateau begins at 78.75 kW |
+| Storm onset | 22 m/s | aligned | output derates, machine stays on load |
+| Shutdown | 25 m/s | raw | brake on, blades feathered, latching |
+| Re-arm | 20 m/s | raw | releases the shutdown latch |
+
+```
+P(v) = 0                                    v < 3
+P(v) = 140 · (min(v,12)/16)²                3 ≤ v < 22
+P(v) = 140 · (12/16)² · (1 − 0.2(v−21))     22 ≤ v < 25
+P(v) = 0                                    v ≥ 25
+```
+
+The derating sheds a fifth of rated per m/s, so it lands on 80%, 60% and 40% at 22,
+23 and 24. It is a continuous ramp, not a step per whole m/s: a staircase would put
+three fresh discontinuities into the curve, which is what derating exists to avoid.
+
+Two discontinuities remain by design. At 22 the plateau drops to 80% (78.75 → 63.00)
+because the ramp starts at 80% rather than 100%, and at 25 the machine brakes from
+whatever it was still making (~19.7 kW) to zero.
+
+The curve below assumes zero yaw error, which is how a power curve is conventionally
+specified. `descending` is the branch taken after a shutdown: the latch re-arms only
+at 20 m/s, so coming down from a storm the whole 20–25 band reads zero.
+
+| v | kW | % rated | derate | descending |
+|---|---|---|---|---|
+| 0 – 2.5 | 0 | 0% | – | 0 |
+| 3.0 | 4.922 | 6.3% | 1.00 | 4.922 |
+| 3.5 | 6.699 | 8.5% | 1.00 | 6.699 |
+| 4.0 | 8.750 | 11.1% | 1.00 | 8.750 |
+| 4.5 | 11.074 | 14.1% | 1.00 | 11.074 |
+| 5.0 | 13.672 | 17.4% | 1.00 | 13.672 |
+| 5.5 | 16.543 | 21.0% | 1.00 | 16.543 |
+| 6.0 | 19.688 | 25.0% | 1.00 | 19.688 |
+| 6.5 | 23.105 | 29.3% | 1.00 | 23.105 |
+| 7.0 | 26.797 | 34.0% | 1.00 | 26.797 |
+| 7.5 | 30.762 | 39.1% | 1.00 | 30.762 |
+| 8.0 | 35.000 | 44.4% | 1.00 | 35.000 |
+| 8.5 | 39.512 | 50.2% | 1.00 | 39.512 |
+| 9.0 | 44.297 | 56.3% | 1.00 | 44.297 |
+| 9.5 | 49.355 | 62.7% | 1.00 | 49.355 |
+| 10.0 | 54.688 | 69.4% | 1.00 | 54.688 |
+| 10.5 | 60.293 | 76.6% | 1.00 | 60.293 |
+| 11.0 | 66.172 | 84.0% | 1.00 | 66.172 |
+| 11.5 | 72.324 | 91.8% | 1.00 | 72.324 |
+| 12.0 – 20.0 | 78.750 | 100% | 1.00 | 78.750 |
+| 20.5 – 21.5 | 78.750 | 100% | 1.00 | **0** |
+| 22.0 | 63.000 | 80% | 0.80 | 0 |
+| 22.5 | 55.125 | 70% | 0.70 | 0 |
+| 23.0 | 47.250 | 60% | 0.60 | 0 |
+| 23.5 | 39.375 | 50% | 0.50 | 0 |
+| 24.0 | 31.500 | 40% | 0.40 | 0 |
+| 24.5 | 23.625 | 30% | 0.30 | 0 |
+| 25.0 and above | 0 | 0% | 0.00 | 0 |
+
+In Lua, the closed form beats interpolating a table:
+
+```lua
+local function powerAt(v)                        -- v = aligned wind, m/s
+  if v < 3 or v >= 25 then return 0.0 end
+  local n = math.min(v, 12) / 16
+  local p = 140 * n * n
+  if v >= 22 then p = p * (1 - 0.2 * (v - 21)) end
+  return p
+end
+
+local function alignedWind(d)                    -- d = getTelemetry()
+  local delta = math.abs(d.windDir - d.nacelleDir)
+  if delta > 180 then delta = 360 - delta end
+  if delta >= 90 then return 0 end
+  local c = math.cos(math.rad(delta))
+  return d.windSpeed * c * c * c
+end
+```
+
+Two things falsify a measured curve: a curtailment setpoint below rated clips it, so
+call `setActivePowerLimit(78.75)` first, and samples with `running == false` have to
+be discarded or the brake pollutes the zero.
 
 ---
 
