@@ -119,10 +119,14 @@ public final class TurbineTelemetrySimulator {
 		out.put(TurbineTelemetry.I2, Math.max(0.0, lineCurrent * (1.0 - 0.006) + wobble(s, 223.0, 0.15)));
 		out.put(TurbineTelemetry.I3, Math.max(0.0, lineCurrent * (1.0 + 0.002) + wobble(s, 241.0, 0.15)));
 
+		// the three blades never track the collective demand perfectly, but they cannot
+		// leave the mechanical range either: clamped to fine pitch at one end and full
+		// feather at the other, or the per-blade jitter would report a negative angle
+		// while the collective sits at zero
 		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE, pitch);
-		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_1, pitch + wobble(s, 89.0, 0.25));
-		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_2, pitch + wobble(s, 97.0, 0.25) - 0.1);
-		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_3, pitch + wobble(s, 101.0, 0.25) + 0.15);
+		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_1, clampPitch(pitch + wobble(s, 89.0, 0.25)));
+		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_2, clampPitch(pitch + wobble(s, 97.0, 0.25) - 0.1));
+		out.put(TurbineTelemetry.BLADE_PITCH_ANGLE_3, clampPitch(pitch + wobble(s, 101.0, 0.25) + 0.15));
 
 		// pressure falls with altitude, and with the weather. The wind term is the one
 		// that matters for coherence: wind exists because of a pressure gradient, so a
@@ -211,6 +215,11 @@ public final class TurbineTelemetrySimulator {
 		if (span <= 0.0) return 0.0;
 
 		return Mth.clamp((s.alignedWindSpeed() - WindTurbineBlockEntity.RATED_SPEED) / span, 0.0, 1.0) * MAX_REGULATING_PITCH;
+	}
+
+	/** Fine pitch to full feather is the whole mechanical travel; nothing reports outside it. */
+	private static double clampPitch(double degrees) {
+		return Mth.clamp(degrees, 0.0, 90.0);
 	}
 
 	/**
