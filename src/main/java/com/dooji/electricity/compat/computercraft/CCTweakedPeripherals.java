@@ -12,8 +12,11 @@ import dan200.computercraft.api.lua.MethodResult;
 import dan200.computercraft.api.peripheral.IComputerAccess;
 import dan200.computercraft.api.peripheral.IDynamicPeripheral;
 import dan200.computercraft.api.peripheral.IPeripheral;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import javax.annotation.Nullable;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.common.util.LazyOptional;
@@ -52,9 +55,40 @@ public final class CCTweakedPeripherals {
 	 * and never has to wait for a tick boundary to answer.
 	 */
 	public static final class WindTurbinePeripheral implements IDynamicPeripheral {
-		/** Tag order is fixed by the telemetry class, so index-to-tag stays stable. */
-		private static final String[] TAGS = TurbineTelemetry.kinds().keySet().toArray(String[]::new);
-		private static final String[] METHOD_NAMES = buildMethodNames();
+		/**
+		 * Lua names already taken by the annotated methods above.
+		 *
+		 * CC registers the annotated methods first and the dynamic ones second, into a
+		 * plain map, so a dynamic name that collides silently overwrites the annotated
+		 * method of the same name. That happened with getActivePowerLimit, where the
+		 * generated getter for the activePowerLimit tag shadowed the real accessor.
+		 * Filtering here keeps the annotated method authoritative.
+		 */
+		private static final Set<String> RESERVED_NAMES = Set.of(
+				"getProductionRate", "getMaxOutput", "getEnergy", "getMaxEnergy", "getEnergyNeeded", "getEnergyFilledPercentage",
+				"isBlacklistedDimension", "stop", "start", "isStopped", "isRunning", "isWindCutOut", "isStoppedByRedstone",
+				"getRedstoneMode", "setRedstoneMode", "getActivePowerLimit", "setActivePowerLimit", "getTelemetry", "getTelemetryKinds"
+		);
+
+		// TAGS and METHOD_NAMES are built together and stay index-aligned, which is what
+		// callMethod relies on: CC passes back the index into getMethodNames().
+		private static final String[] TAGS;
+		private static final String[] METHOD_NAMES;
+
+		static {
+			List<String> tags = new ArrayList<>();
+			List<String> names = new ArrayList<>();
+			for (String tag : TurbineTelemetry.kinds().keySet()) {
+				String name = "get" + Character.toUpperCase(tag.charAt(0)) + tag.substring(1);
+				if (RESERVED_NAMES.contains(name)) continue;
+
+				tags.add(tag);
+				names.add(name);
+			}
+
+			TAGS = tags.toArray(String[]::new);
+			METHOD_NAMES = names.toArray(String[]::new);
+		}
 
 		private final WindTurbineBlockEntity turbine;
 
@@ -240,19 +274,22 @@ public final class CCTweakedPeripherals {
 		}
 
 		@Override
-		public MethodResult callMethod(IComputerAccess computer, ILuaContext context, int method, IArguments arguments) {
-			if (method < 0 || method >= TAGS.length) return MethodResult.of();
-
-			return MethodResult.of(turbine.getTelemetry().get(TAGS[method]));
-		}
-
-		private static String[] buildMethodNames() {
-			String[] names = new String[TAGS.length];
-			for (int i = 0; i < TAGS.length; i++) {
-				names[i] = "get" + Character.toUpperCase(TAGS[i].charAt(0)) + TAGS[i].substring(1);
+		public MethodResult callMethod(IComputerAccess computer, ILuaContext context, int method, IArguments arguments) throws LuaException {
+			if (method < 0 || method >= TAGS.length) {
+				// unreachable through CC, which only ever passes back an index it took from
+				// getMethodNames(). Raised rather than answered with an empty result, which
+				// Lua would show as an indistinguishable nil.
+				throw new LuaException("telemetry method index " + method + " out of range");
 			}
 
-			return names;
+			Object value = turbine.getTelemetry().get(TAGS[method]);
+			if (value == null) {
+				// the turbine has not published a snapshot yet: its chunk is loaded but it
+				// has not ticked. Saying so beats a bare nil that looks like a missing method.
+				throw new LuaException("no telemetry for '" + TAGS[method] + "' yet, the turbine has not ticked");
+			}
+
+			return MethodResult.of(value);
 		}
 	}
 }
