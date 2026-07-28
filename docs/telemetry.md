@@ -1,5 +1,7 @@
 # Wind Turbine — ComputerCraft API
 
+← [Back to the README](../README.md) · [Integrations](integrations.md) · [Getting started](getting-started.md)
+
 The Wind Turbine is a ComputerCraft peripheral of type `electricity_wind_turbine`.
 Place a computer against the **base block** of the turbine — the model is a tall
 tower, but the block entity only occupies the block at its foot — or attach a
